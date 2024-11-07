@@ -27,7 +27,7 @@ interface SocketResponse {
 const ChatPage: React.FC = () => {
   //-------------- State & Variables --------------//
   const [chat, setChat] = useState<Message[]>([
-    { text: "Hello! How can I assist you today?", sender: "bot" },
+    { text: "Hi , I'm Tasi. How can I assist you today?", sender: "bot" },
   ]);
   const [isThinking, setIsThinking] = useState<boolean>(false);
   const [partialResponse, setPartialResponse] = useState<string>(""); // Track partial response
