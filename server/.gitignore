@@ -1,0 +1,16 @@
+
+# Env
+.env
+.env.local
+.env.production
+# node.js
+#
+node_modules/
+npm-debug.log
+yarn-error.log
+# public files
+public/files
+
+# Migration
+db-dump/*
+.bun.lockb
