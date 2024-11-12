@@ -34,4 +34,10 @@ module.exports = {
       data,
     });
   },
+  findClaimByClaimNumber: async claimNumber => {
+    return await FindOne({
+      model: Claim,
+      where: {claimNumber: claimNumber},
+    });
+  },
 };

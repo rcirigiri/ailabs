@@ -41,4 +41,12 @@ module.exports = {
       data,
     });
   },
+  findPolicyByPolicyId: async id => {
+    return await FindOne({
+      model: Policy,
+      where: {
+        policyNumber: id,
+      },
+    });
+  },
 };
