@@ -18,8 +18,8 @@ const openaiConfig = {
 
 io.on('connection', socket => {
   console.log('New client connected', LOG_LEVELS.INFO);
-  
   const chatService = new ChatService(openaiConfig);
+  
   chatService.initializeConversation(socket.id);
 
   socket.on('chat message', async ({text}) => {
