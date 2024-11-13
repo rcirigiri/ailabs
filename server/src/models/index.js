@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
-exports.User = require('./UserModel');
-exports.Role = require('./RoleModel');
-exports.Organisation = require('./OrganisationModel');
+exports.Policy = require('./PolicyModel');
+exports.PolicyDetails = require('./PolicyDetailsModel');
+exports.Conversation = require('./ConversationModel');
+exports.Claim = require('./ClaimModel');
 exports.Mongoose = mongoose;

@@ -31,6 +31,7 @@ router.get('/', (req, res) => healthCheckAPIResponse(res));
  */
 router.get('/health-check', (req, res) => healthCheckAPIResponse(res));
 router.use('/auth', require('./auth'));
+router.use('/policy', require('./policy'));
 
 /**
  * Protected APIs
