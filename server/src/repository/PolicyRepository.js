@@ -49,4 +49,14 @@ module.exports = {
       },
     });
   },
+  findPolicyByFirstLastAndZipCode: async data => {
+    return await FindOne({
+      model: Policy,
+      where: {
+        firstName: data.first_name,
+        lastName: data.last_name,
+        postalCode: data.postal_code,
+      },
+    });
+  },
 };

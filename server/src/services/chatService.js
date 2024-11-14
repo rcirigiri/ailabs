@@ -1,8 +1,11 @@
 const {AzureOpenAI} = require('openai');
+const moment = require('moment');
 const {
   findPolicyByPolicyId,
   findClaimByClaimNumber,
   createClaim,
+  createConversation,
+  findPolicyByFirstLastAndZipCode,
 } = require('../repository');
 const {LOG_LEVELS} = require('../utils/constants');
 
@@ -10,248 +13,300 @@ class ChatService {
   constructor(config) {
     this.client = new AzureOpenAI(config);
     this.conversationHistories = new Map();
-    this.policyDetails = null;
-    this.conversationState = 'INITIAL'; // ENUM(INITIAL,ENQUIRY,NEWCLAIM)
+    this.flowState = new Map();
   }
 
-  initializeConversation(socketId) {
+  initializeState(socketId) {
+    this.flowState.set(socketId, {
+      currentStep: 'INITIAL',
+      policyDetails: null,
+      claimDetails: null,
+      collectedData: {},
+      intent: null,
+      newClaimStep: 0,
+    });
+  }
+
+  getState(socketId) {
+    return this.flowState.get(socketId);
+  }
+
+  updateState(socketId, updates) {
+    const currentState = this.getState(socketId);
+    this.flowState.set(socketId, {...currentState, ...updates});
+  }
+
+  async initializeConversation(socketId) {
+    this.initializeState(socketId);
     const INITIAL_CMD = `You are an auto-insurance claim assistant. Your task is to guide users to file the first notice of loss claims or enquire about previous claims by following these steps -
-
-# Step 1 : Enquire about the policy number , If policy number is not available, ask for first name , last name and postal code. 
-
+# Step 1 : Enquire about the policy number , If policy number is not available, ask for first name , last name and postal code.
 # Only proceed with the next step once you have information about policy number or (first name , last name and postal code). Else keep requesting either Policy number or (first name , last name and postal code) from the user.
-
 # Step 3 : Ask and Understand the intent of the user, the intent can either be inquiry or new_claim.
-
-# Only proceed with the next step once you have information about policy number or (first name , last name and postal code) and intent. Else keep requesting information about the missing entity. 
-
+# Only proceed with the next step once you have information about policy number or (first name , last name and postal code) and intent. Else keep requesting information about the missing entity.
 # Step 4 : If the user's intent is inquiry, ask them to provide the claim number. Else, if their intent is new claim filing, thank them for sharing their details and let that know that we will begin the process by asking a set of questions, do not ask any more questions.
-
 # Step 5 : If user intent was inquiry and they have still not provided claim number, continue requesting the same. Else if, their intent was inquiry and they have provided the claim number, thank them and ask them to ask their query now. Else, skip this step.
-
-In your response include only the following keys and the entities extracted for these fields -
-
-1. policy_number 
-
+In your response include only the following keys and the entities extracted for these fields
+1. policy_number
 2. first_name, last_name and postal_code
-
 3. intent
-
 4. claim_number
+5. response`;
 
-5. response
-
-##### EXAMPLE RESPONSE ######
-
-1. {"policy_number" : "123KKL12", "first_name" : "", "last_name" : "", "postal_code" : "","intent" : "new_claim", "claim_number" : "","response" : "Thank you for sharing. We will now proceed with filing a new claim. To achieve this I will ask you a set of questions."}
-
-2. { "policy_number" : "", "first_name" : "John", "last_name" : "Doe", "postal_code" : "", "intent" : "inquiry", "claim_number" : "","response" : "Thank you for sharing your first name and last name, I also require your postal code"}
-
-3. { "policy_number" : "", "first_name" : "", "last_name" : "", "postal_code" : "", "intent" : "", "claim_number" : "","response" : "Can you please share details about your policy number or your first name, last name and postal code to continue with the process."}
-
-4. { "policy_number" : "123KKL12", "first_name" : "", "last_name" : "", "postal_code" : "", "intent" : "", "claim_number" : "","response" : "Thank you for your details. Are you looking to inquire about an existing claim or are you filing a new claim?"}
-
-5. { "policy_number" : "123KKL12", "first_name" : "", "last_name" : "", "postal_code" : "", "intent" : "inquiry", "claim_number" : "", "response" : "Thank you for your details. Can you please share your claim number?"}
-
-6. { "policy_number" : "123KKL12", "first_name" : "", "last_name" : "", "postal_code" : "", "intent" : "inquiry", "claim_number" : "58661233", "response" : "Thank you for your details. Please ask me your query"}
-
-`;
     this.conversationHistories.set(socketId, [
       {role: 'system', content: INITIAL_CMD},
     ]);
   }
 
-  getConversationHistory(socketId) {
-    if (!this.conversationHistories.has(socketId)) {
-      this.initializeConversation(socketId);
-    }
-    return this.conversationHistories.get(socketId);
-  }
-
-  addToConversationHistory(socketId, role, content) {
-    const history = this.getConversationHistory(socketId);
-    history.push({role, content});
-  }
-
-  async handleChat(socket, text) {
+  async processMessage(socketId, message) {
     try {
-      this.addToConversationHistory(socket.id, 'user', text);
-      console.log('[USER MESSAGE] =>', text, LOG_LEVELS.DEBUG);
+      const state = this.getState(socketId);
+      let response;
 
-      /**
-       * Handle the conversation based on it's state ENUM(INITIAL,ENQUIRY,NEWCLAIM)
-       */
-
-      switch (this.conversationState) {
-        case 'ENQUIRY':
-          break;
-        case 'NEWCLAIM':
-          this.handleNewClaimConversation(socket);
-          break;
-        default:
-          this.handleInitialConversation(socket);
-          break;
+      if (state.currentStep === 'INITIAL') {
+        response = await this.handleInitialConversation(socketId, message);
+      } else if (state.currentStep === 'NEW_CLAIM') {
+        response = await this.handleNewClaimConversation(socketId, message);
+      } else if (state.currentStep === 'INQUIRY') {
+        response = await this.handleInquiryConversation(socketId, message);
       }
+
+      return response;
     } catch (error) {
-      console.error('Error processing message:', error, LOG_LEVELS.ERROR);
-      socket.emit('response', {
+      console.error('Error processing message:', error);
+      return {
         message: 'An error occurred while processing your request.',
-        isComplete: true,
-        isError: true,
-      });
+        error: true,
+      };
     }
   }
 
-  async handleInitialConversation(socket) {
-    const messages = this.getConversationHistory(socket.id);
+  async handleInitialConversation(socketId, message) {
+    const history = this.getConversationHistory(socketId);
+    history.push({role: 'user', content: message});
 
     const response = await this.client.chat.completions.create({
-      messages,
+      messages: history,
       model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-      stream: false,
+    });
+    let parsedResponse = {};
+    try {
+      console.log('TRY');
+      console.log('response.choices[0].message.content',response.choices[0].message.content);
+      
+      parsedResponse = JSON.parse(response.choices[0].message.content);
+    } catch (error) {
+      console.log('TRY1111111111111');
+
+      parsedResponse = response.choices[0].message.content;
+    }
+    history.push({
+      role: 'assistant',
+      content: response.choices[0].message.content,
+    });
+    console.log(`[ASSISTANT]`, parsedResponse);
+    // Handle policy verification
+    if (parsedResponse.policy_number) {
+      const policy = await findPolicyByPolicyId(parsedResponse.policy_number);
+      console.log('policy', policy);
+
+      if (policy) {
+        this.updateState(socketId, {
+          policyDetails: policy,
+        });
+      } else {
+        parsedResponse = {
+          ...parsedResponse,
+          response:
+            'The policy number you provided is not found. Can you please provide a valid policy number?',
+        };
+      }
+    }
+
+    if (
+      parsedResponse.first_name &&
+      parsedResponse.last_name &&
+      parsedResponse.postal_code
+    ) {
+      const policy = await findPolicyByFirstLastAndZipCode(parsedResponse);
+      if (policy) {
+        this.updateState(socketId, {
+          policyDetails: policy,
+        });
+      } else {
+        parsedResponse = {
+          ...parsedResponse,
+          response:
+            'The details you provided are not found. Can you please provide a valid first name, last name and postal code?',
+        };
+      }
+    }
+
+    // Handle intent determination
+    if (parsedResponse.intent) {
+      if (parsedResponse.intent === 'new_claim') {
+        this.updateState(socketId, {
+          currentStep: 'NEW_CLAIM',
+          intent: 'new_claim',
+        });
+      } else if (
+        parsedResponse.intent === 'inquiry' &&
+        parsedResponse.claim_number
+      ) {
+        const claimInfo = await findClaimByClaimNumber(
+          parsedResponse.claim_number,
+        );
+        if (claimInfo) {
+          this.updateState(socketId, {
+            currentStep: 'INQUIRY',
+            claimDetails: claimInfo,
+          });
+        } else {
+          parsedResponse = {
+            ...parsedResponse,
+            response:
+              'The claim number you provided is not found. Can you please provide a valid claim number?',
+          };
+        }
+      }
+    }
+    console.log(
+      parsedResponse?.response
+        ? JSON.stringify(parsedResponse) + 'sssssssssssssssss'
+        : parsedResponse,
+    );
+
+    return {
+      message: parsedResponse?.response
+        ? parsedResponse?.response
+        : parsedResponse,
+    };
+  }
+
+  async handleNewClaimConversation(socketId, message) {
+    const state = this.getState(socketId);
+    const history = this.getConversationHistory(socketId);
+
+    if (state.newClaimStep === 0) {
+      const NEW_CLAIM_PROMPT = `You are an auto-insurance claim assistant. You have the following details of the vehicles registered under their policy: ${JSON.stringify(state.policyDetails)}. Your task is to guide users file the first notice of loss claims by asking the following questions one at a time:
+        - Question 1: Enquire about the date on which the incident occurred .
+        - Question 2: Enquire about the location of the incident, collect address line, state, city and zipcode
+        - Question 3: Enquire about which vehicle from ${JSON.stringify(state.policyDetails.vehicle)} was involved in the accident , do not object make it bullet points so that user can easily understand.
+        - Question 4: If vehicle is not present in ${JSON.stringify(state.policyDetails.vehicle)}, enquire about vehicle details such License Plate, VIN, Year, Make and Model
+        - Question 5: Enquire about the cause of loss, was it due to Animal impact, wind, hail, fire or something?
+        - Question 6: Enquire about details of the vehicle damage
+        - Question 7: Once you have all the above inputs, finally ask the user if they like to proceed to submit the claim
+        - If user agrees to proceed with above data then return a response with just a string "SUBMITTED" and nothing else.`;
+
+      history.push({role: 'system', content: NEW_CLAIM_PROMPT});
+      this.updateState(socketId, {newClaimStep: 1});
+    }
+
+    history.push({role: 'user', content: message});
+
+    const response = await this.client.chat.completions.create({
+      messages: history,
+      model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
     });
 
-    const fullResponse = response.choices[0].message?.content;
-    let responseJson;
+    const responseContent = response.choices[0].message.content;
+    history.push({role: 'assistant', content: responseContent});
+
+    if (responseContent.trim() === 'SUBMITTED') {
+      const EXTRACT_PROMPT = `You are a highly accurate entity extraction assistant. Your role is to analyze the conversation between an insurance claims agent and the user and extract the following relevant entities. If you are unable to find entities for a specific field, leave them empty. Return your response as JSON with the following fields only, do not respond with any other text.
+      {
+        "policyNumber": "",
+        "vehicle": "",
+        "claimNumber": "",
+        "firstName": "",
+        "lastName": "",
+        "postalCode": "",
+        "incidentDate": "",
+        "lossLocation": {
+          "addressLine": "",
+          "state": "",
+          "city": "",
+          "postalCode": ""
+        },
+        "vehicleDetails": {
+          "licensePlate": "",
+          "VIN": "",
+          "year": "",
+          "make": "",
+          "model": ""
+        },
+        "causeOfLoss": "",
+        "vehicleDamageDetails": "",
+        "claimSubmitted": false,
+        "claimStatus": "pending"
+      }`;
+
+      history.push({role: 'system', content: EXTRACT_PROMPT});
+
+      const extractResponse = await this.client.chat.completions.create({
+        messages: history,
+        model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
+      });
+
+      const claimData = JSON.parse(extractResponse.choices[0].message.content);
+      const claimNumber = 'CLM' + moment().valueOf();
+
+      await createClaim({
+        ...claimData,
+        claimNumber,
+        policyNumber: state.policyDetails.policyNumber,
+      });
+
+      await createConversation({
+        policyNumber: state.policyDetails.policyNumber,
+        sessionId: socketId,
+        conversationRaw: JSON.stringify(history),
+      });
+
+      return {
+        message: `Claim created successfully. Your claim number is ${claimNumber}`,
+        complete: true,
+      };
+    }
 
     try {
-      responseJson = JSON.parse(fullResponse);
-    } catch (err) {
-      responseJson = null;
+      const parsedResponse = JSON.parse(response.choices[0].message.content);
+      if (parsedResponse) return {message: parsedResponse.response};
+    } catch (error) {
+      return {message: response.choices[0].message.content};
     }
 
-    console.log('[ASSISTANT RESPONSE] =>', responseJson, LOG_LEVELS.DEBUG);
-
-    if (responseJson?.intent) {
-      // Found the intent, proceed to next conversation state based on intent
-      if (responseJson?.intent == 'new_claim')
-        this.conversationState = 'NEWCLAIM';
-      else this.conversationState = 'ENQUIRY';
-
-      // Call chat handler to initiate new conversation state and response message
-      socket.emit('response', {
-        message: responseJson?.response,
-        isComplete: true,
-      });
-      // Adding conversation inside if block to avoid index disrupt of array
-      this.addToConversationHistory(socket.id, 'assistant', fullResponse);
-      this.handleChat(socket, 'ok');
-    } else {
-      /**
-       * TODO : Check if policy number matches from DB then store policy details along with claim detail in this.policyDetails.
-       * If matches then store and response as usual
-       * If data are given but did not match then show generic not found message
-       * Else continue with original response
-       */
-      // Remove the below temp hardcoded thing
-      if (responseJson?.policy_number == '1731053373639') {
-        this.policyDetails = {
-          _id: '672dc73d066da975c5756a79',
-          policyNumber: '1731053373639',
-          firstName: 'Emma',
-          lastName: 'Davis',
-          postalCode: '75201',
-          vehicle: {
-            make: 'Toyota',
-            model: 'Camry',
-            year: '2020',
-            licensePlate: 'ABC1234',
-            vin: '1HGBH41JXMN109186',
-          },
-        };
-      } else if (
-        responseJson?.policy_number ||
-        (responseJson?.first_name &&
-          responseJson?.last_name &&
-          responseJson?.postal_code)
-      ) {
-        responseJson.response =
-          'The details you provided is not found. Can you please share details about your policy number or your first name, last name and postal code to continue with the process.';
-      }
-      this.addToConversationHistory(socket.id, 'assistant', fullResponse);
-      socket.emit('response', {
-        message: responseJson?.response,
-        isComplete: true,
-      });
-    }
+    // return {message: responseContent};
   }
 
-  async handleNewClaimConversation(socket) {
-    const policy = this.policyDetails;
-    if (!policy)
-      return socket.emit('response', {
-        message: 'No policy found with the provided policy number.',
-        isComplete: true,
-      });
+  async handleInquiryConversation(socketId, message) {
+    const state = this.getState(socketId);
+    const history = this.getConversationHistory(socketId);
 
-    const NEW_CLAIM_PROMPT = `You are an auto-insurance claim assistant. You have the following details of the vehicles registered under their policy: ${JSON.stringify(policy)}. Your task is to guide users file the first notice of loss claims by asking the following questions
-        # Question 1 : Enquire about the date on which the incident occurred
-        # Question 2 : Enquire about the location of the incident, collect address line , state , city and zipcode
-        # Question 3 : Enquire about which vehicle from ${JSON.stringify(policy.vehicle)} was involved in the accident
-        # Question 4 : If vehicle is not present in ${JSON.stringify(policy.vehicle)}, enquire about vehicle details such License Plate, VIN, Year ,Make and Model
-        # Question 5 : Enquire about the cause of loss, was it due to Animal impact , wind , hail , fire or something?
-        # Question 6 : Enquire about details of the vehicle damage
-        # Question 7 : Once you have all the above inputs, finally ask the user if they like to proceed to submit the claim
-        # If user agrees to proceed then return a response with just a string "SUBMITTED" and nothing else.`;
-    this.addToConversationHistory(socket.id, 'system', NEW_CLAIM_PROMPT);
-    //this.addToConversationHistory(socket.id, 'user', 'Please proceed');
+    const inquiry_prompt = `You are an auto-insurance claim assistant. You have the following information about the user's claim : ${JSON.stringify(state.claimDetails)}. The user has come to inquire about an existing claim filed by them. Using ONLY the information provided to you about the user's claim, answer the user's query.`;
 
-    const messages = this.getConversationHistory(socket.id);
+    history.push({role: 'system', content: inquiry_prompt});
+    history.push({role: 'user', content: message});
 
     const response = await this.client.chat.completions.create({
-      messages,
+      messages: history,
       model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-      stream: false,
     });
 
-    const fullResponse = response.choices[0].message?.content;
-
-    console.log('[ASSISTANT RESPONSE] =>', fullResponse, LOG_LEVELS.DEBUG);
-
-    /**
-     * TODO : If response is SUBMITTED then it is the signal to close the conversation and proceed.
-     * Extract all the entities
-     * Create a new claim in DB
-     * Response with the claim number status and necessary details you received.
-     */
-    if (fullResponse == 'SUBMITTED') {
-      socket.emit('response', {
-        message: 'Claim created successfully.',
-        isComplete: true,
-      });
-    } else {
-      socket.emit('response', {
-        message: fullResponse,
-        isComplete: true,
-      });
+    history.push({
+      role: 'assistant',
+      content: response.choices[0].message.content,
+    });
+    try {
+      const parsedResponse = JSON.parse(response.choices[0].message.content);
+      if (parsedResponse) return {message: parsedResponse.response};
+    } catch (error) {
+      return {message: response.choices[0].message.content};
     }
   }
 
-  // async handleIntent(socket, responseJson) {
-  //   if (responseJson.intent === 'inquiry') {
-  //     if (responseJson.claim_number) {
-  //       const claim = await findClaimByClaimNumber(responseJson.claim_number);
-  //       if (claim) {
-  //         const INQUIRY_PROMPT = `You are an auto-insurance claim assistant. You have the following information about the user's claim: ${JSON.stringify(claim)}. The user has come to inquire about an existing claim filed by them. Using ONLY the information provided to you about the user's claim, answer the user's query.`;
-  //         this.addToConversationHistory(socket.id, 'system', INQUIRY_PROMPT);
-  //       } else {
-  //         socket.emit('response', {
-  //           message: 'No claim found with the provided claim number.',
-  //           isComplete: true,
-  //         });
-  //       }
-  //     }
-  //   } else if (responseJson.intent === 'new_claim') {
-
-  //       //this.addToConversationHistory(socket.id, 'system', NEW_CLAIM_PROMPT);
-  //     } else {
-  //       socket.emit('response', {
-  //         message: 'No policy found with the provided policy number.',
-  //         isComplete: true,
-  //       });
-  //     }
-  //   }
-  // }
+  getConversationHistory(socketId) {
+    return this.conversationHistories.get(socketId) || [];
+  }
 }
 
 module.exports = ChatService;

@@ -3,12 +3,12 @@ const mongoose = require('mongoose');
 const ClaimSchema = new mongoose.Schema(
   {
     policyNumber: {
-      required: true,
+      required: false,
       type: String,
     },
     vehicle: {
       type: String,
-      required: true,
+      required: false,
     },
     claimNumber: {
       type: String,
@@ -17,19 +17,19 @@ const ClaimSchema = new mongoose.Schema(
     },
     firstName: {
       type: String,
-      required: true,
+      required: false,
     },
     lastName: {
       type: String,
-      required: true,
+      required: false,
     },
     postalCode: {
       type: String,
-      required: true,
+      required: false,
     },
     incidentDate: {
       type: Date,
-      required: true,
+      required: false,
     },
     lossLocation: {
       addressLine: {
@@ -74,11 +74,11 @@ const ClaimSchema = new mongoose.Schema(
     },
     causeOfLoss: {
       type: String,
-      required: true,
+      required: false,
     },
     vehicleDamageDetails: {
       type: String,
-      required: true,
+      required: false,
     },
     claimSubmitted: {
       type: Boolean,
