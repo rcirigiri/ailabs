@@ -1,11 +1,11 @@
-const {createServer} = require('http');
-const {env, mongoose, app} = require('./config');
+const { createServer } = require('http');
+const { env, mongoose, app } = require('./config');
 const ChatService = require('./services/chatService');
 const { LOG_LEVELS } = require('./utils/constants');
 
 const server = createServer(app);
 const io = require('socket.io')(server, {
-  cors: {origin: '*'},
+  cors: { origin: '*' }
 });
 
 const openaiConfig = {
@@ -15,19 +15,34 @@ const openaiConfig = {
   deployment: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
 };
 
+const chatService = new ChatService(openaiConfig);
 
 io.on('connection', socket => {
   console.log('New client connected', LOG_LEVELS.INFO);
-  const chatService = new ChatService(openaiConfig);
-  
-  chatService.initializeConversation(socket.id);
 
-  socket.on('chat message', async ({text}) => {
-    await chatService.handleChat(socket, text);
+  // Initialize conversation and send welcome message
+  chatService.initializeConversation(socket.id)
+    .then(message => {
+      // socket.emit('message', { message });
+    });
+
+  // Single event handler for all messages
+  socket.on('message', async ({ text }) => {
+    try {
+      const response = await chatService.processMessage(socket.id, text);
+      socket.emit('message', response);
+    } catch (error) {
+      console.error('Error processing message:', error);
+      socket.emit('message', {
+        message: 'An error occurred while processing your request.',
+        error: true
+      });
+    }
   });
 
   socket.on('disconnect', () => {
     chatService.conversationHistories.delete(socket.id);
+    chatService.flowState.delete(socket.id);
     console.log('Client disconnected', LOG_LEVELS.INFO);
   });
 });

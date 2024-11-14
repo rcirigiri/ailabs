@@ -18,21 +18,12 @@ interface Message {
   sender: "user" | "bot" | "error";
 }
 
-interface SocketResponse {
-  message: string;
-  isComplete: boolean;
-  isError: boolean;
-}
-
 const ChatPage: React.FC = () => {
   //-------------- State & Variables --------------//
   const [chat, setChat] = useState<Message[]>([
-    { text: "Hi , I'm Tasi. How can I assist you today?", sender: "bot" },
+    { text: "Hi, I'm Tasi. How can I assist you today?", sender: "bot" },
   ]);
   const [isThinking, setIsThinking] = useState<boolean>(false);
-  const [partialResponse, setPartialResponse] = useState<string>(""); // Track partial response
-  const [completedMessage, setCompletedMessage] = useState<string>(""); // Track completed message
-  const [error, setError] = useState<string | null>(null); // Track errors separately
   const chatEndRef = useRef<HTMLDivElement>(null);
   const handleError = useErrorLog("pages/ChatPage");
 
@@ -53,39 +44,30 @@ const ChatPage: React.FC = () => {
       socket.on("connect", onConnect);
       socket.on("disconnect", onDisconnect);
 
-      // Listen for partial bot responses
-      socket.on("response", (data: SocketResponse) => {
-        const { message, isComplete, isError } = data;
+      // Listen for bot responses
+      socket.on("message", (data: { message: string; isError?: boolean }) => {
+        console.log(JSON.stringify(data));
+        
+        const { message, isError } = data;
 
         if (isError) {
           notification.error({
             message: JSON.parse(message)?.error?.message || "Unknown error",
           });
           setIsThinking(false); // Stop thinking indicator
-        } else if (isComplete) {
-          // Check if the full message has already been added
-          if (completedMessage !== partialResponse + message) {
-            // Add the full response to the chat when streaming is complete
-            setChat((prev) => [
-              ...prev,
-              { text: partialResponse + message, sender: "bot" },
-            ]);
-            setCompletedMessage(partialResponse + message);
-          }
-          setPartialResponse(""); // Clear partial response state
-          setIsThinking(false); // Stop thinking indicator
+          setChat((prev) => [
+            ...prev,
+            { text: `Error: ${message}`, sender: "error" },
+          ]);
         } else {
-          // Update the partial response state
-          setPartialResponse((prev) => prev + message);
-          setIsThinking(true);
+          setChat((prev) => [...prev, { text: message, sender: "bot" }]);
+          setIsThinking(false); // Stop thinking indicator
         }
       });
 
       // Listen for socket errors
       socket.on("error", (error: { message: string }) => {
         console.error("Socket error:", error); // Log to console for debugging
-        setError(error.message || "An error occurred");
-        setIsThinking(false); // Hide typing indicator on error
         setChat((prev) => [
           ...prev,
           {
@@ -93,22 +75,23 @@ const ChatPage: React.FC = () => {
             sender: "error",
           },
         ]);
+        setIsThinking(false); // Hide typing indicator on error
       });
 
       return () => {
         socket.off("connect", onConnect);
         socket.off("disconnect", onDisconnect);
-        socket.off("response"); // Clean up event listener
+        socket.off("message"); // Clean up event listener
         socket.off("error"); // Clean up error listener
       };
     } catch (e: any) {
       handleError(e);
     }
-  }, [partialResponse, completedMessage]);
+  }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat, partialResponse]);
+  }, [chat]);
 
   //-------------- Other Methods --------------//
 
@@ -121,11 +104,9 @@ const ChatPage: React.FC = () => {
       try {
         setChat((prev) => [...prev, { text, sender: "user" }]);
         setIsThinking(true); // Show thinking indicator
-        setPartialResponse(""); // Reset partial response for new message
-        setCompletedMessage(""); // Reset completed message tracker
 
         // Emit the message to the server
-        socket.emit("chat message", { text });
+        socket.emit("message", { text });
       } catch (e: any) {
         handleError(e);
       }
@@ -143,10 +124,6 @@ const ChatPage: React.FC = () => {
           {chat.map((message, index) => (
             <ChatMessage key={index} message={message} />
           ))}
-          {/* Display partial response */}
-          {partialResponse && !error && (
-            <ChatMessage message={{ text: partialResponse, sender: "bot" }} />
-          )}
           {isThinking && <TypingIndicator />}
 
           <div ref={chatEndRef} />
