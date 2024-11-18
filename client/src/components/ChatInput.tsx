@@ -1,23 +1,42 @@
-/**
- * ChatInput Component - Handles user message input
- * @param {Function} onSend - Function to send message
- */
-
 import React, { useState } from "react";
-import { Input, Button } from "antd";
-import { SendOutlined } from "@ant-design/icons";
+import { Input, Button, Upload, message } from "antd";
+import { SendOutlined, UploadOutlined } from "@ant-design/icons";
+import type { RcFile } from "antd/es/upload/interface";
 
 interface ChatInputProps {
   onSend: (text: string) => void;
+  onSendImage: (base64Image: string) => void;
   isThinking: boolean;
+  imageRequested: boolean;
 }
 
-const ChatInput: React.FC<ChatInputProps> = ({ onSend, isThinking }) => {
+const ChatInput: React.FC<ChatInputProps> = ({ onSend, onSendImage, isThinking, imageRequested }) => {
   const [inputText, setInputText] = useState<string>("");
 
   const handleSend = () => {
-    onSend(inputText);
-    setInputText("");
+    if (inputText.trim()) {
+      onSend(inputText);
+      setInputText("");
+    }
+  };
+
+  const getBase64 = (file: RcFile): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = (error) => reject(error);
+    });
+
+  const handleUpload = async (file: RcFile) => {
+    try {
+      const base64 = await getBase64(file);
+      onSendImage(base64);
+      message.success("Image uploaded successfully!");
+    } catch (error) {
+      message.error("Image upload failed.");
+    }
+    return false; // Prevent antd from auto-uploading
   };
 
   return (
@@ -43,6 +62,17 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSend, isThinking }) => {
       >
         <SendOutlined />
       </Button>
+      {imageRequested && (
+        <Upload
+          beforeUpload={handleUpload}
+          showUploadList={false}
+          accept="image/png"
+        >
+          <Button icon={<UploadOutlined />} disabled={isThinking}>
+            Upload Image
+          </Button>
+        </Upload>
+      )}
     </div>
   );
 };

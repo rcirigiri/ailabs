@@ -1,11 +1,12 @@
-const { createServer } = require('http');
-const { env, mongoose, app } = require('./config');
+const {createServer} = require('http');
+const {env, mongoose, app} = require('./config');
 const ChatService = require('./services/chatService');
-const { LOG_LEVELS } = require('./utils/constants');
+const {LOG_LEVELS} = require('./utils/constants');
+const multer = require('multer');
 
 const server = createServer(app);
 const io = require('socket.io')(server, {
-  cors: { origin: '*' }
+  cors: {origin: '*'},
 });
 
 const openaiConfig = {
@@ -21,13 +22,12 @@ io.on('connection', socket => {
   console.log('New client connected', LOG_LEVELS.INFO);
 
   // Initialize conversation and send welcome message
-  chatService.initializeConversation(socket.id)
-    .then(message => {
-      // socket.emit('message', { message });
-    });
+  chatService.initializeConversation(socket.id).then(message => {
+    // socket.emit('message', { message });
+  });
 
   // Single event handler for all messages
-  socket.on('message', async ({ text }) => {
+  socket.on('message', async ({text}) => {
     try {
       const response = await chatService.processMessage(socket.id, text);
       socket.emit('message', response);
@@ -35,7 +35,24 @@ io.on('connection', socket => {
       console.error('Error processing message:', error);
       socket.emit('message', {
         message: 'An error occurred while processing your request.',
-        error: true
+        error: true,
+      });
+    }
+  });
+
+  // Handle image uploads
+  socket.on('image', async ({image}) => {
+    // console.log(">>> ~ socket.on ~ image:", image)
+    try {
+      // const response = await chatService.processMessage(socket.id, image);
+      // socket.emit('message', response);
+      const response = await chatService.processMessage(socket.id, null, image);
+      socket.emit('message', response);
+    } catch (error) {
+      console.error('Error processing message:', error);
+      socket.emit('message', {
+        message: 'An error occurred while processing your request.',
+        error: true,
       });
     }
   });
