@@ -9,11 +9,17 @@ const {
 } = require('../repository');
 const {LOG_LEVELS} = require('../utils/constants');
 
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const sharp = require('sharp');
+
 class ChatService {
   constructor(config) {
     this.client = new AzureOpenAI(config);
     this.conversationHistories = new Map();
     this.flowState = new Map();
+
   }
 
   initializeState(socketId) {
@@ -57,7 +63,7 @@ In your response include only the following keys and the entities extracted for 
     ]);
   }
 
-  async processMessage(socketId, message) {
+  async processMessage(socketId, message, image) {
     try {
       const state = this.getState(socketId);
       let response;
@@ -65,7 +71,11 @@ In your response include only the following keys and the entities extracted for 
       if (state.currentStep === 'INITIAL') {
         response = await this.handleInitialConversation(socketId, message);
       } else if (state.currentStep === 'NEW_CLAIM') {
-        response = await this.handleNewClaimConversation(socketId, message);
+        response = await this.handleNewClaimConversation(
+          socketId,
+          message,
+          image,
+        );
       } else if (state.currentStep === 'INQUIRY') {
         response = await this.handleInquiryConversation(socketId, message);
       }
@@ -91,8 +101,11 @@ In your response include only the following keys and the entities extracted for 
     let parsedResponse = {};
     try {
       console.log('TRY');
-      console.log('response.choices[0].message.content',response.choices[0].message.content);
-      
+      console.log(
+        'response.choices[0].message.content',
+        response.choices[0].message.content,
+      );
+
       parsedResponse = JSON.parse(response.choices[0].message.content);
     } catch (error) {
       console.log('TRY1111111111111');
@@ -182,7 +195,7 @@ In your response include only the following keys and the entities extracted for 
     };
   }
 
-  async handleNewClaimConversation(socketId, message) {
+  async handleNewClaimConversation(socketId, message, base64Data) {
     const state = this.getState(socketId);
     const history = this.getConversationHistory(socketId);
 
@@ -194,12 +207,126 @@ In your response include only the following keys and the entities extracted for 
         - Question 4: If vehicle is not present in ${JSON.stringify(state.policyDetails.vehicle)}, enquire about vehicle details such License Plate, VIN, Year, Make and Model
         - Question 5: Enquire about the cause of loss, was it due to Animal impact, wind, hail, fire or something?
         - Question 6: Enquire about details of the vehicle damage
-        - Question 7: Once you have all the above inputs, finally ask the user if they like to proceed to submit the claim
+        - Question 7 : Ask if the user can upload any pictures associated with the damage
+        - Question 8: Once you have all the above inputs, finally ask the user if they like to proceed to submit the claim
         - If user agrees to proceed with above data then return a response with just a string "SUBMITTED" and nothing else.`;
 
       history.push({role: 'system', content: NEW_CLAIM_PROMPT});
       this.updateState(socketId, {newClaimStep: 1});
     }
+    console.log('[STEP] : =>>>>>>>>>>>>>>>>>>>>', state.newClaimStep);
+
+    if (state.newClaimStep === 5) {
+      this.updateState(socketId, {newClaimStep: state.newClaimStep + 1});
+      history.push({role: 'assistant', content: 'Please upload pictures associated with the damage'});
+      return {
+        message: `Please upload pictures associated with the damage`,
+        requestImage: true,
+      };
+    }
+    // if (base64Data) {
+    //   // Create a unique filename for the image
+    //   // Define the directory to save the images
+    //   const filePath = path.join(__dirname, '../public/uploads');
+    //   if (!fs.existsSync(filePath)) {
+    //     fs.mkdirSync(filePath, {recursive: true});
+    //   }
+    //   try {
+    //     // Remove the base64 header part (e.g., "data:image/png;base64,")
+    //     const base64Image = base64Data.replace(/^data:image\/\w+;base64,/, '');
+
+    //     // Decode the base64 image data into a buffer
+    //     const imageBuffer = Buffer.from(base64Image, 'base64');
+
+    //     // Generate a unique filename for the image
+    //     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    //     const outputFilePath = path.join(filePath, `image-${uniqueSuffix}.png`);
+
+    //     // Use sharp to compress and save the image
+    //     await sharp(imageBuffer)
+    //       .resize(800) // Optional: Resize the image (you can set the width, height, or keep the aspect ratio)
+    //       .toFormat('png') // Optional: Set the image format (e.g., PNG)
+    //       .toFile(outputFilePath); // Save the image to the filesystem
+
+    //     // Return the saved image path
+    //     return outputFilePath;
+    //   } catch (error) {
+    //     console.log(
+    //       '>>> ~ ChatService ~ handleNewClaimConversation ~ error:',
+    //       error,
+    //     );
+    //     // throw new Error('Error compressing or saving the image: ' + error.message);
+    //     return {
+    //       message: 'An error occurred while processing your image.',
+    //       error: true,
+    //       requestedImage: false,
+    //     };
+    //   }
+    // }
+
+    if (base64Data) {
+      // Create a unique filename for the image
+      // Define the directory to save the images
+      const filePath = path.join(__dirname, '../public/uploads');
+      if (!fs.existsSync(filePath)) {
+        fs.mkdirSync(filePath, { recursive: true });
+      }
+      try {
+        // Remove the base64 header part (e.g., "data:image/png;base64,")
+        const base64Image = base64Data.replace(/^data:image\/\w+;base64,/, '');
+        // Decode the base64 image data into a buffer
+        const imageBuffer = Buffer.from(base64Image, 'base64');
+        // Generate a unique filename for the image
+        const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+        const fileName = `image-${uniqueSuffix}.png`
+        const outputFilePath = path.join(filePath, fileName);
+        // Use sharp to compress and save the image
+        await sharp(imageBuffer)
+          .resize(800) // Optional: Resize the image (you can set the width, height, or keep the aspect ratio)
+          .toFormat('png') // Optional: Set the image format (e.g., PNG)
+          .toFile(outputFilePath); // Save the image to the filesystem
+
+          
+          history.push({role: 'user', content:  `File imageURL is ${fileName}`});
+
+          const response = await this.client.chat.completions.create({
+            messages: history,
+            model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
+          });
+
+          history.push({role: 'assistant', content:  response.choices[0].message.content});
+          try {
+            const parsedResponse = JSON.parse(response.choices[0].message.content);
+            if (parsedResponse)
+              return {message: parsedResponse.response, requestImage: false};
+          } catch (error) {
+            return {
+              message: response.choices[0].message.content,
+              requestImage: false,
+            };
+          }
+
+          // return {
+          //   message: 'Image  Unloaded successfully',
+          //   error: true,
+          //   requestedImage: false,
+          // };
+
+      } catch (error) {
+        console.log(
+          '>>> ~ ChatService ~ handleNewClaimConversation ~ error:',
+          error,
+        );
+        // throw new Error('Error compressing or saving the image: ' + error.message);
+        return {
+          message: 'An error occurred while processing your image.',
+          error: true,
+          requestedImage: false,
+        };
+      }
+    }
+
+    
 
     history.push({role: 'user', content: message});
 
@@ -210,7 +337,7 @@ In your response include only the following keys and the entities extracted for 
 
     const responseContent = response.choices[0].message.content;
     history.push({role: 'assistant', content: responseContent});
-
+    this.updateState(socketId, {newClaimStep: state.newClaimStep + 1});
     if (responseContent.trim() === 'SUBMITTED') {
       const EXTRACT_PROMPT = `You are a highly accurate entity extraction assistant. Your role is to analyze the conversation between an insurance claims agent and the user and extract the following relevant entities. If you are unable to find entities for a specific field, leave them empty. Return your response as JSON with the following fields only, do not respond with any other text.
       {
@@ -238,6 +365,7 @@ In your response include only the following keys and the entities extracted for 
         "vehicleDamageDetails": "",
         "claimSubmitted": false,
         "claimStatus": "pending"
+        "imageURL": ""
       }`;
 
       history.push({role: 'system', content: EXTRACT_PROMPT});
@@ -270,9 +398,13 @@ In your response include only the following keys and the entities extracted for 
 
     try {
       const parsedResponse = JSON.parse(response.choices[0].message.content);
-      if (parsedResponse) return {message: parsedResponse.response};
+      if (parsedResponse)
+        return {message: parsedResponse.response, requestImage: false};
     } catch (error) {
-      return {message: response.choices[0].message.content};
+      return {
+        message: response.choices[0].message.content,
+        requestImage: false,
+      };
     }
 
     // return {message: responseContent};

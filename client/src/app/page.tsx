@@ -24,6 +24,7 @@ const ChatPage: React.FC = () => {
     { text: "Hi, I'm Tasi. How can I assist you today?", sender: "bot" },
   ]);
   const [isThinking, setIsThinking] = useState<boolean>(false);
+  const [imageRequested, setImageRequested] = useState<boolean>(false); // New state for image request
   const chatEndRef = useRef<HTMLDivElement>(null);
   const handleError = useErrorLog("pages/ChatPage");
 
@@ -31,58 +32,42 @@ const ChatPage: React.FC = () => {
 
   useEffect(() => {
     try {
-      if (socket.connected) {
-        setIsThinking(false);
-      }
-
-      const onConnect = () => {
-        setIsThinking(false); // Hide thinking indicator when connected
-      };
-
-      const onDisconnect = () => setIsThinking(true); // Show thinking indicator when disconnected
+      const onConnect = () => setIsThinking(false);
+      const onDisconnect = () => setIsThinking(true);
 
       socket.on("connect", onConnect);
       socket.on("disconnect", onDisconnect);
 
-      // Listen for bot responses
-      socket.on("message", (data: { message: string; isError?: boolean }) => {
-        console.log(JSON.stringify(data));
-        
-        const { message, isError } = data;
+      socket.on("message", (data: { message: string; isError?: boolean; requestImage?: boolean }) => {
+        const { message, isError, requestImage } = data;
 
         if (isError) {
           notification.error({
             message: JSON.parse(message)?.error?.message || "Unknown error",
           });
-          setIsThinking(false); // Stop thinking indicator
-          setChat((prev) => [
-            ...prev,
-            { text: `Error: ${message}`, sender: "error" },
-          ]);
+          setIsThinking(false);
+          setChat((prev) => [...prev, { text: `Error: ${message}`, sender: "error" }]);
         } else {
           setChat((prev) => [...prev, { text: message, sender: "bot" }]);
-          setIsThinking(false); // Stop thinking indicator
+          setIsThinking(false);
+          setImageRequested(!!requestImage); // Set image request state based on message data
         }
       });
 
-      // Listen for socket errors
       socket.on("error", (error: { message: string }) => {
-        console.error("Socket error:", error); // Log to console for debugging
+        console.error("Socket error:", error);
         setChat((prev) => [
           ...prev,
-          {
-            text: `Error: ${error.message || "An error occurred"}`,
-            sender: "error",
-          },
+          { text: `Error: ${error.message || "An error occurred"}`, sender: "error" },
         ]);
-        setIsThinking(false); // Hide typing indicator on error
+        setIsThinking(false);
       });
 
       return () => {
         socket.off("connect", onConnect);
         socket.off("disconnect", onDisconnect);
-        socket.off("message"); // Clean up event listener
-        socket.off("error"); // Clean up error listener
+        socket.off("message");
+        socket.off("error");
       };
     } catch (e: any) {
       handleError(e);
@@ -93,24 +78,19 @@ const ChatPage: React.FC = () => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat]);
 
-  //-------------- Other Methods --------------//
-
-  /**
-   * Sends a user message and triggers bot response.
-   * @param {string} text - User input message
-   */
   const sendMessage = (text: string): void => {
     if (text.trim()) {
-      try {
-        setChat((prev) => [...prev, { text, sender: "user" }]);
-        setIsThinking(true); // Show thinking indicator
-
-        // Emit the message to the server
-        socket.emit("message", { text });
-      } catch (e: any) {
-        handleError(e);
-      }
+      setChat((prev) => [...prev, { text, sender: "user" }]);
+      setIsThinking(true);
+      socket.emit("message", { text });
     }
+  };
+
+  const sendImage = (base64Image: string): void => {
+    setChat((prev) => [...prev, { text: "[Image Sent]", sender: "user" }]);
+    setIsThinking(true);
+    socket.emit("image", { image: base64Image });
+    setImageRequested(false); // Reset image request state after sending
   };
 
   return (
@@ -125,11 +105,10 @@ const ChatPage: React.FC = () => {
             <ChatMessage key={index} message={message} />
           ))}
           {isThinking && <TypingIndicator />}
-
           <div ref={chatEndRef} />
         </main>
         <footer className="border-t border-gray-200 p-4">
-          <ChatInput onSend={sendMessage} isThinking={isThinking} />
+          <ChatInput onSend={sendMessage} onSendImage={sendImage} isThinking={isThinking} imageRequested={imageRequested} />
         </footer>
       </div>
     </div>

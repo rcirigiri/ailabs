@@ -88,6 +88,10 @@ const ClaimSchema = new mongoose.Schema(
       type: String,
       default: 'pending',
     },
+    imageURL: {
+      type: String,
+      required: false,
+    },
   },
   {timestamps: true},
 );
