@@ -400,7 +400,26 @@ In your response include only the following keys and the entities extracted for 
         model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
       });
 
-      const claimData = JSON.parse(extractResponse.choices[0].message.content);
+      // const claimData = JSON.parse(extractResponse.choices[0].message.content);
+
+      let claimData;
+
+      try {
+        let rawContent = extractResponse.choices[0].message.content.trim(); // Trim leading/trailing whitespace
+
+        // Check if content starts and ends with code block syntax
+        if (rawContent.startsWith('```json') && rawContent.endsWith('```')) {
+          rawContent = rawContent.slice(7, -3).trim(); // Remove ```json and ``` markers
+        }
+
+        claimData = JSON.parse(rawContent); // Parse the cleaned content
+      } catch (error) {
+        console.error('Error parsing claimData:', error);
+        claimData = extractResponse.choices[0].message.content; // Fallback to raw content
+      }
+
+      console.log('claimData:', claimData);
+
       const claimNumber = 'CLM' + moment().valueOf();
 
       await createClaim({
