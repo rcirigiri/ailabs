@@ -34,6 +34,7 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSend, onSendImage, isThinking, 
       onSendImage(base64);
       message.success("Image uploaded successfully!");
     } catch (error) {
+      console.log(">>> ~ handleUpload ~ error:", error)
       message.error("Image upload failed.");
     }
     return false; // Prevent antd from auto-uploading

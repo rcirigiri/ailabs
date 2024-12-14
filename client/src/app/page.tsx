@@ -7,7 +7,6 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { socket } from "@/utils";
-import { useErrorLog } from "@/hooks";
 import ChatMessage from "@/components/ChatMessage";
 import TypingIndicator from "@/components/TypingIndicator";
 import ChatInput from "@/components/ChatInput";
@@ -26,7 +25,7 @@ const ChatPage: React.FC = () => {
   const [isThinking, setIsThinking] = useState<boolean>(false);
   const [imageRequested, setImageRequested] = useState<boolean>(false); // New state for image request
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const handleError = useErrorLog("pages/ChatPage");
+  // const handleError = useErrorLog("pages/ChatPage");
 
   //-------------- Use Effects --------------//
 
@@ -70,7 +69,9 @@ const ChatPage: React.FC = () => {
         socket.off("error");
       };
     } catch (e: any) {
-      handleError(e);
+      // handleError(e);
+      console.warn(e);
+      
     }
   }, []);
 
