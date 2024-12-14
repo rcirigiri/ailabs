@@ -10,10 +10,15 @@ const io = require('socket.io')(server, {
 });
 
 const openaiConfig = {
-  endpoint: process.env.AZURE_OPENAI_API_ENDPOINT,
-  apiKey: process.env.AZURE_OPENAI_API_KEY,
-  apiVersion: process.env.AZURE_OPENAI_API_VERSION,
-  deployment: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
+  // endpoint: process.env.AZURE_OPENAI_API_ENDPOINT,
+  // apiKey: process.env.AZURE_OPENAI_API_KEY,
+  // apiVersion: process.env.AZURE_OPENAI_API_VERSION,
+  // deployment: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
+  azureOpenAIEndpoint: process.env.AZURE_OPENAI_API_ENDPOINT,
+  azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
+  // azureOpenAIApiInstanceName: 'chat',
+  azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
+  azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION,
 };
 
 const chatService = new ChatService(openaiConfig);

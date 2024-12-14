@@ -1,4 +1,4 @@
-const {AzureOpenAI} = require('openai');
+const {AzureChatOpenAI} = require('@langchain/openai');
 const moment = require('moment');
 const {
   findPolicyByPolicyId,
@@ -16,7 +16,7 @@ const sharp = require('sharp');
 
 class ChatService {
   constructor(config) {
-    this.client = new AzureOpenAI(config);
+    this.client = new AzureChatOpenAI(config);
     this.conversationHistories = new Map();
     this.flowState = new Map();
   }
@@ -93,33 +93,30 @@ In your response include only the following keys and the entities extracted for 
     const history = this.getConversationHistory(socketId);
     history.push({role: 'user', content: message});
 
-    const response = await this.client.chat.completions.create({
-      messages: history,
-      model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-    });
+    const response = await this.client.invoke(history);
     let parsedResponse = {};
     // try {
-    //   const res = response.choices[0].message.content
+    //   const res = response.content
     //   console.log('TRY');
     //   console.log(
-    //     'response.choices[0].message.content',
+    //     'response.content',
     //     res,
     //   );
     //   if(res?.startsWith('```json')){
     //     parsedResponse = JSON.parse(res.slice(5, -3));
     //   }
 
-    //   parsedResponse = JSON.parse(response.choices[0].message.content);
+    //   parsedResponse = JSON.parse(response.content);
     // } catch (error) {
     //   console.log('TRY1111111111111');
 
-    //   parsedResponse = response.choices[0].message.content;
+    //   parsedResponse = response.content;
     // }
 
     try {
-      const res = response.choices[0].message.content.trim(); // Trim any whitespace
+      const res = response.content.trim(); // Trim any whitespace
       console.log('TRY');
-      console.log('response.choices[0].message.content', res);
+      console.log('response.content', res);
 
       // Check if response starts and ends with code block notation
       if (res.startsWith('```json') && res.endsWith('```')) {
@@ -130,12 +127,12 @@ In your response include only the following keys and the entities extracted for 
       }
     } catch (error) {
       console.log('Error parsing JSON, returning raw content.');
-      parsedResponse = response.choices[0].message.content; // Fallback to raw content
+      parsedResponse = response.content; // Fallback to raw content
     }
 
     history.push({
       role: 'assistant',
-      content: response.choices[0].message.content,
+      content: response.content,
     });
     console.log(`[ASSISTANT]`, parsedResponse);
     // Handle policy verification
@@ -312,24 +309,19 @@ In your response include only the following keys and the entities extracted for 
 
         history.push({role: 'user', content: `File imageURL is ${fileName}`});
 
-        const response = await this.client.chat.completions.create({
-          messages: history,
-          model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-        });
+        const response = await this.client.invoke(history);
 
         history.push({
           role: 'assistant',
-          content: response.choices[0].message.content,
+          content: response.content,
         });
         try {
-          const parsedResponse = JSON.parse(
-            response.choices[0].message.content,
-          );
+          const parsedResponse = JSON.parse(response.content);
           if (parsedResponse)
             return {message: parsedResponse.response, requestImage: false};
         } catch (error) {
           return {
-            message: response.choices[0].message.content,
+            message: response.content,
             requestImage: false,
           };
         }
@@ -355,12 +347,9 @@ In your response include only the following keys and the entities extracted for 
 
     history.push({role: 'user', content: message});
 
-    const response = await this.client.chat.completions.create({
-      messages: history,
-      model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-    });
+    const response = await this.client.invoke(history);
 
-    const responseContent = response.choices[0].message.content;
+    const responseContent = response.content;
     history.push({role: 'assistant', content: responseContent});
     this.updateState(socketId, {newClaimStep: state.newClaimStep + 1});
     if (responseContent.trim() === 'SUBMITTED') {
@@ -395,17 +384,14 @@ In your response include only the following keys and the entities extracted for 
 
       history.push({role: 'system', content: EXTRACT_PROMPT});
 
-      const extractResponse = await this.client.chat.completions.create({
-        messages: history,
-        model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-      });
+      const extractResponse = await this.client.invoke(history);
 
-      // const claimData = JSON.parse(extractResponse.choices[0].message.content);
+      // const claimData = JSON.parse(extractResponse.content);
 
       let claimData;
 
       try {
-        let rawContent = extractResponse.choices[0].message.content.trim(); // Trim leading/trailing whitespace
+        let rawContent = extractResponse.content.trim(); // Trim leading/trailing whitespace
 
         // Check if content starts and ends with code block syntax
         if (rawContent.startsWith('```json') && rawContent.endsWith('```')) {
@@ -415,7 +401,7 @@ In your response include only the following keys and the entities extracted for 
         claimData = JSON.parse(rawContent); // Parse the cleaned content
       } catch (error) {
         console.error('Error parsing claimData:', error);
-        claimData = extractResponse.choices[0].message.content; // Fallback to raw content
+        claimData = extractResponse.content; // Fallback to raw content
       }
 
       console.log('claimData:', claimData);
@@ -441,18 +427,18 @@ In your response include only the following keys and the entities extracted for 
     }
 
     // try {
-    //   const parsedResponse = JSON.parse(response.choices[0].message.content);
+    //   const parsedResponse = JSON.parse(response.content);
     //   if (parsedResponse)
     //     return {message: parsedResponse.response, requestImage: false};
     // } catch (error) {
     //   return {
-    //     message: response.choices[0].message.content,
+    //     message: response.content,
     //     requestImage: false,
     //   };
     // }
 
     try {
-      let rawContent = response.choices[0].message.content.trim(); // Trim leading/trailing whitespace
+      let rawContent = response.content.trim(); // Trim leading/trailing whitespace
 
       // Check if content starts and ends with code block syntax
       if (rawContent.startsWith('```json') && rawContent.endsWith('```')) {
@@ -472,7 +458,7 @@ In your response include only the following keys and the entities extracted for 
       console.log('Error parsing JSON, returning raw content.');
 
       return {
-        message: response.choices[0].message.content, // Fallback to raw content
+        message: response.content, // Fallback to raw content
         requestImage: false,
       };
     }
@@ -489,24 +475,21 @@ In your response include only the following keys and the entities extracted for 
     history.push({role: 'system', content: inquiry_prompt});
     history.push({role: 'user', content: message});
 
-    const response = await this.client.chat.completions.create({
-      messages: history,
-      model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-    });
+    const response = await this.client.invoke(history);
 
     history.push({
       role: 'assistant',
-      content: response.choices[0].message.content,
+      content: response.content,
     });
     // try {
-    //   const parsedResponse = JSON.parse(response.choices[0].message.content);
+    //   const parsedResponse = JSON.parse(response.content);
     //   if (parsedResponse) return {message: parsedResponse.response};
     // } catch (error) {
-    //   return {message: response.choices[0].message.content};
+    //   return {message: response.content};
     // }
 
     try {
-      let rawContent = response.choices[0].message.content.trim(); // Trim leading/trailing whitespace
+      let rawContent = response.content.trim(); // Trim leading/trailing whitespace
 
       // Check if content starts and ends with code block syntax
       if (rawContent.startsWith('```json') && rawContent.endsWith('```')) {
@@ -520,7 +503,7 @@ In your response include only the following keys and the entities extracted for 
       }
     } catch (error) {
       // Return raw content as fallback in case of parsing errors
-      return {message: response.choices[0].message.content};
+      return {message: response.content};
     }
   }
 
