@@ -1,4 +1,4 @@
-const {AzureOpenAI} = require('openai');
+const {AzureChatOpenAI} = require('@langchain/openai');
 const moment = require('moment');
 const {
   findPolicyByPolicyId,
@@ -16,10 +16,9 @@ const sharp = require('sharp');
 
 class ChatService {
   constructor(config) {
-    this.client = new AzureOpenAI(config);
+    this.client = new AzureChatOpenAI(config);
     this.conversationHistories = new Map();
     this.flowState = new Map();
-
   }
 
   initializeState(socketId) {
@@ -94,27 +93,46 @@ In your response include only the following keys and the entities extracted for 
     const history = this.getConversationHistory(socketId);
     history.push({role: 'user', content: message});
 
-    const response = await this.client.chat.completions.create({
-      messages: history,
-      model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-    });
+    const response = await this.client.invoke(history);
     let parsedResponse = {};
+    // try {
+    //   const res = response.content
+    //   console.log('TRY');
+    //   console.log(
+    //     'response.content',
+    //     res,
+    //   );
+    //   if(res?.startsWith('```json')){
+    //     parsedResponse = JSON.parse(res.slice(5, -3));
+    //   }
+
+    //   parsedResponse = JSON.parse(response.content);
+    // } catch (error) {
+    //   console.log('TRY1111111111111');
+
+    //   parsedResponse = response.content;
+    // }
+
     try {
+      const res = response.content.trim(); // Trim any whitespace
       console.log('TRY');
-      console.log(
-        'response.choices[0].message.content',
-        response.choices[0].message.content,
-      );
+      console.log('response.content', res);
 
-      parsedResponse = JSON.parse(response.choices[0].message.content);
+      // Check if response starts and ends with code block notation
+      if (res.startsWith('```json') && res.endsWith('```')) {
+        console.log('Removing code block formatting...');
+        parsedResponse = JSON.parse(res.slice(7, -3).trim()); // Remove ```json and ```
+      } else {
+        parsedResponse = JSON.parse(res); // Parse normally if no code block
+      }
     } catch (error) {
-      console.log('TRY1111111111111');
-
-      parsedResponse = response.choices[0].message.content;
+      console.log('Error parsing JSON, returning raw content.');
+      parsedResponse = response.content; // Fallback to raw content
     }
+
     history.push({
       role: 'assistant',
-      content: response.choices[0].message.content,
+      content: response.content,
     });
     console.log(`[ASSISTANT]`, parsedResponse);
     // Handle policy verification
@@ -218,7 +236,10 @@ In your response include only the following keys and the entities extracted for 
 
     if (state.newClaimStep === 5) {
       this.updateState(socketId, {newClaimStep: state.newClaimStep + 1});
-      history.push({role: 'assistant', content: 'Please upload pictures associated with the damage'});
+      history.push({
+        role: 'assistant',
+        content: 'Please upload pictures associated with the damage',
+      });
       return {
         message: `Please upload pictures associated with the damage`,
         requestImage: true,
@@ -269,7 +290,7 @@ In your response include only the following keys and the entities extracted for 
       // Define the directory to save the images
       const filePath = path.join(__dirname, '../public/uploads');
       if (!fs.existsSync(filePath)) {
-        fs.mkdirSync(filePath, { recursive: true });
+        fs.mkdirSync(filePath, {recursive: true});
       }
       try {
         // Remove the base64 header part (e.g., "data:image/png;base64,")
@@ -278,7 +299,7 @@ In your response include only the following keys and the entities extracted for 
         const imageBuffer = Buffer.from(base64Image, 'base64');
         // Generate a unique filename for the image
         const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-        const fileName = `image-${uniqueSuffix}.png`
+        const fileName = `image-${uniqueSuffix}.png`;
         const outputFilePath = path.join(filePath, fileName);
         // Use sharp to compress and save the image
         await sharp(imageBuffer)
@@ -286,32 +307,30 @@ In your response include only the following keys and the entities extracted for 
           .toFormat('png') // Optional: Set the image format (e.g., PNG)
           .toFile(outputFilePath); // Save the image to the filesystem
 
-          
-          history.push({role: 'user', content:  `File imageURL is ${fileName}`});
+        history.push({role: 'user', content: `File imageURL is ${fileName}`});
 
-          const response = await this.client.chat.completions.create({
-            messages: history,
-            model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-          });
+        const response = await this.client.invoke(history);
 
-          history.push({role: 'assistant', content:  response.choices[0].message.content});
-          try {
-            const parsedResponse = JSON.parse(response.choices[0].message.content);
-            if (parsedResponse)
-              return {message: parsedResponse.response, requestImage: false};
-          } catch (error) {
-            return {
-              message: response.choices[0].message.content,
-              requestImage: false,
-            };
-          }
+        history.push({
+          role: 'assistant',
+          content: response.content,
+        });
+        try {
+          const parsedResponse = JSON.parse(response.content);
+          if (parsedResponse)
+            return {message: parsedResponse.response, requestImage: false};
+        } catch (error) {
+          return {
+            message: response.content,
+            requestImage: false,
+          };
+        }
 
-          // return {
-          //   message: 'Image  Unloaded successfully',
-          //   error: true,
-          //   requestedImage: false,
-          // };
-
+        // return {
+        //   message: 'Image  Unloaded successfully',
+        //   error: true,
+        //   requestedImage: false,
+        // };
       } catch (error) {
         console.log(
           '>>> ~ ChatService ~ handleNewClaimConversation ~ error:',
@@ -326,16 +345,11 @@ In your response include only the following keys and the entities extracted for 
       }
     }
 
-    
-
     history.push({role: 'user', content: message});
 
-    const response = await this.client.chat.completions.create({
-      messages: history,
-      model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-    });
+    const response = await this.client.invoke(history);
 
-    const responseContent = response.choices[0].message.content;
+    const responseContent = response.content;
     history.push({role: 'assistant', content: responseContent});
     this.updateState(socketId, {newClaimStep: state.newClaimStep + 1});
     if (responseContent.trim() === 'SUBMITTED') {
@@ -370,12 +384,28 @@ In your response include only the following keys and the entities extracted for 
 
       history.push({role: 'system', content: EXTRACT_PROMPT});
 
-      const extractResponse = await this.client.chat.completions.create({
-        messages: history,
-        model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-      });
+      const extractResponse = await this.client.invoke(history);
 
-      const claimData = JSON.parse(extractResponse.choices[0].message.content);
+      // const claimData = JSON.parse(extractResponse.content);
+
+      let claimData;
+
+      try {
+        let rawContent = extractResponse.content.trim(); // Trim leading/trailing whitespace
+
+        // Check if content starts and ends with code block syntax
+        if (rawContent.startsWith('```json') && rawContent.endsWith('```')) {
+          rawContent = rawContent.slice(7, -3).trim(); // Remove ```json and ``` markers
+        }
+
+        claimData = JSON.parse(rawContent); // Parse the cleaned content
+      } catch (error) {
+        console.error('Error parsing claimData:', error);
+        claimData = extractResponse.content; // Fallback to raw content
+      }
+
+      console.log('claimData:', claimData);
+
       const claimNumber = 'CLM' + moment().valueOf();
 
       await createClaim({
@@ -396,13 +426,39 @@ In your response include only the following keys and the entities extracted for 
       };
     }
 
+    // try {
+    //   const parsedResponse = JSON.parse(response.content);
+    //   if (parsedResponse)
+    //     return {message: parsedResponse.response, requestImage: false};
+    // } catch (error) {
+    //   return {
+    //     message: response.content,
+    //     requestImage: false,
+    //   };
+    // }
+
     try {
-      const parsedResponse = JSON.parse(response.choices[0].message.content);
-      if (parsedResponse)
-        return {message: parsedResponse.response, requestImage: false};
+      let rawContent = response.content.trim(); // Trim leading/trailing whitespace
+
+      // Check if content starts and ends with code block syntax
+      if (rawContent.startsWith('```json') && rawContent.endsWith('```')) {
+        console.log('Removing code block formatting...');
+        rawContent = rawContent.slice(7, -3).trim(); // Remove ```json and ``` markers
+      }
+
+      const parsedResponse = JSON.parse(rawContent); // Attempt to parse the cleaned content
+
+      if (parsedResponse) {
+        return {
+          message: parsedResponse.response,
+          requestImage: false,
+        };
+      }
     } catch (error) {
+      console.log('Error parsing JSON, returning raw content.');
+
       return {
-        message: response.choices[0].message.content,
+        message: response.content, // Fallback to raw content
         requestImage: false,
       };
     }
@@ -419,20 +475,35 @@ In your response include only the following keys and the entities extracted for 
     history.push({role: 'system', content: inquiry_prompt});
     history.push({role: 'user', content: message});
 
-    const response = await this.client.chat.completions.create({
-      messages: history,
-      model: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-    });
+    const response = await this.client.invoke(history);
 
     history.push({
       role: 'assistant',
-      content: response.choices[0].message.content,
+      content: response.content,
     });
+    // try {
+    //   const parsedResponse = JSON.parse(response.content);
+    //   if (parsedResponse) return {message: parsedResponse.response};
+    // } catch (error) {
+    //   return {message: response.content};
+    // }
+
     try {
-      const parsedResponse = JSON.parse(response.choices[0].message.content);
-      if (parsedResponse) return {message: parsedResponse.response};
+      let rawContent = response.content.trim(); // Trim leading/trailing whitespace
+
+      // Check if content starts and ends with code block syntax
+      if (rawContent.startsWith('```json') && rawContent.endsWith('```')) {
+        rawContent = rawContent.slice(7, -3).trim(); // Remove ```json and ``` markers
+      }
+
+      const parsedResponse = JSON.parse(rawContent); // Attempt to parse the cleaned content
+
+      if (parsedResponse) {
+        return {message: parsedResponse.response}; // Return the parsed message
+      }
     } catch (error) {
-      return {message: response.choices[0].message.content};
+      // Return raw content as fallback in case of parsing errors
+      return {message: response.content};
     }
   }
 
