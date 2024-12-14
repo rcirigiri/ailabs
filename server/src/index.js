@@ -7,6 +7,7 @@ const multer = require('multer');
 const server = createServer(app);
 const io = require('socket.io')(server, {
   cors: {origin: '*'},
+  path: '/api/',
 });
 
 const openaiConfig = {
@@ -21,9 +22,9 @@ const openaiConfig = {
   azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION,
 };
 
-const chatService = new ChatService(openaiConfig);
 
 io.on('connection', socket => {
+  const chatService = new ChatService(openaiConfig);
   console.log('New client connected', LOG_LEVELS.INFO);
 
   // Initialize conversation and send welcome message
