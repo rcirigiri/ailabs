@@ -11,6 +11,7 @@ import {
   ExclamationCircleOutlined,
 } from "@ant-design/icons";
 import moment from "moment";
+import { motion } from "framer-motion";
 
 interface MessageProps {
   message: {
@@ -36,7 +37,10 @@ const ChatMessage: React.FC<MessageProps> = ({ message }) => {
   };
 
   return (
-    <div
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
       className={`flex w-full px-3 mt-4 ${
         sender === "user" ? "justify-end" : "justify-start"
       }`}
@@ -63,8 +67,9 @@ const ChatMessage: React.FC<MessageProps> = ({ message }) => {
           </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 };
 
 export default ChatMessage;
+

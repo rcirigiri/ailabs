@@ -1,4 +1,4 @@
-const {AzureChatOpenAI} = require('@langchain/openai');
+const { AzureChatOpenAI } = require('@langchain/openai');
 const moment = require('moment');
 const {
   findPolicyByPolicyId,
@@ -7,7 +7,7 @@ const {
   createConversation,
   findPolicyByFirstLastAndZipCode,
 } = require('../repository');
-const {LOG_LEVELS} = require('../utils/constants');
+const { LOG_LEVELS } = require('../utils/constants');
 
 const path = require('path');
 const fs = require('fs');
@@ -38,7 +38,7 @@ class ChatService {
 
   updateState(socketId, updates) {
     const currentState = this.getState(socketId);
-    this.flowState.set(socketId, {...currentState, ...updates});
+    this.flowState.set(socketId, { ...currentState, ...updates });
   }
 
   async initializeConversation(socketId) {
@@ -46,7 +46,7 @@ class ChatService {
     const INITIAL_CMD = `You are an auto-insurance claim assistant. Your task is to guide users to file the first notice of loss claims or enquire about previous claims by following these steps -
 # Step 1 : Enquire about the policy number , If policy number is not available, ask for first name , last name and postal code.
 # Only proceed with the next step once you have information about policy number or (first name , last name and postal code). Else keep requesting either Policy number or (first name , last name and postal code) from the user.
-# Step 3 : Ask and Understand the intent of the user, the intent can either be inquiry or new_claim.
+# Step 3 : Ask and Understand the intent of the user, the intent can either be inquire or new_claim.
 # Only proceed with the next step once you have information about policy number or (first name , last name and postal code) and intent. Else keep requesting information about the missing entity.
 # Step 4 : If the user's intent is inquiry, ask them to provide the claim number. Else, if their intent is new claim filing, thank them for sharing their details and let that know that we will begin the process by asking a set of questions, do not ask any more questions.
 # Step 5 : If user intent was inquiry and they have still not provided claim number, continue requesting the same. Else if, their intent was inquiry and they have provided the claim number, thank them and ask them to ask their query now. Else, skip this step.
@@ -58,7 +58,7 @@ In your response include only the following keys and the entities extracted for 
 5. response`;
 
     this.conversationHistories.set(socketId, [
-      {role: 'system', content: INITIAL_CMD},
+      { role: 'system', content: INITIAL_CMD },
     ]);
   }
 
@@ -91,7 +91,7 @@ In your response include only the following keys and the entities extracted for 
 
   async handleInitialConversation(socketId, message) {
     const history = this.getConversationHistory(socketId);
-    history.push({role: 'user', content: message});
+    history.push({ role: 'user', content: message });
 
     const response = await this.client.invoke(history);
     let parsedResponse = {};
@@ -179,8 +179,11 @@ In your response include only the following keys and the entities extracted for 
           currentStep: 'NEW_CLAIM',
           intent: 'new_claim',
         });
+        return {
+          message: "Thank you for sharing your details. can i begin the process by asking a set of questions? If you're ready, please respond with 'yes'.",
+        };
       } else if (
-        parsedResponse.intent === 'inquiry' &&
+        parsedResponse.intent === 'inquire' &&
         parsedResponse.claim_number
       ) {
         const claimInfo = await findClaimByClaimNumber(
@@ -205,7 +208,6 @@ In your response include only the following keys and the entities extracted for 
         ? JSON.stringify(parsedResponse) + 'sssssssssssssssss'
         : parsedResponse,
     );
-
     return {
       message: parsedResponse?.response
         ? parsedResponse?.response
@@ -229,13 +231,13 @@ In your response include only the following keys and the entities extracted for 
         - Question 8: Once you have all the above inputs, finally ask the user if they like to proceed to submit the claim
         - If user agrees to proceed with above data then return a response with just a string "SUBMITTED" and nothing else.`;
 
-      history.push({role: 'system', content: NEW_CLAIM_PROMPT});
-      this.updateState(socketId, {newClaimStep: 1});
+      history.push({ role: 'system', content: NEW_CLAIM_PROMPT });
+      this.updateState(socketId, { newClaimStep: 1 });
     }
     console.log('[STEP] : =>>>>>>>>>>>>>>>>>>>>', state.newClaimStep);
 
     if (state.newClaimStep === 5) {
-      this.updateState(socketId, {newClaimStep: state.newClaimStep + 1});
+      this.updateState(socketId, { newClaimStep: state.newClaimStep + 1 });
       history.push({
         role: 'assistant',
         content: 'Please upload pictures associated with the damage',
@@ -290,7 +292,7 @@ In your response include only the following keys and the entities extracted for 
       // Define the directory to save the images
       const filePath = path.join(__dirname, '../public/uploads');
       if (!fs.existsSync(filePath)) {
-        fs.mkdirSync(filePath, {recursive: true});
+        fs.mkdirSync(filePath, { recursive: true });
       }
       try {
         // Remove the base64 header part (e.g., "data:image/png;base64,")
@@ -307,7 +309,7 @@ In your response include only the following keys and the entities extracted for 
           .toFormat('png') // Optional: Set the image format (e.g., PNG)
           .toFile(outputFilePath); // Save the image to the filesystem
 
-        history.push({role: 'user', content: `File imageURL is ${fileName}`});
+        history.push({ role: 'user', content: `File imageURL is ${fileName}` });
 
         const response = await this.client.invoke(history);
 
@@ -318,7 +320,7 @@ In your response include only the following keys and the entities extracted for 
         try {
           const parsedResponse = JSON.parse(response.content);
           if (parsedResponse)
-            return {message: parsedResponse.response, requestImage: false};
+            return { message: parsedResponse.response, requestImage: false };
         } catch (error) {
           return {
             message: response.content,
@@ -345,13 +347,13 @@ In your response include only the following keys and the entities extracted for 
       }
     }
 
-    history.push({role: 'user', content: message});
+    history.push({ role: 'user', content: message });
 
     const response = await this.client.invoke(history);
 
     const responseContent = response.content;
-    history.push({role: 'assistant', content: responseContent});
-    this.updateState(socketId, {newClaimStep: state.newClaimStep + 1});
+    history.push({ role: 'assistant', content: responseContent });
+    this.updateState(socketId, { newClaimStep: state.newClaimStep + 1 });
     if (responseContent.trim() === 'SUBMITTED') {
       const EXTRACT_PROMPT = `You are a highly accurate entity extraction assistant. Your role is to analyze the conversation between an insurance claims agent and the user and extract the following relevant entities. If you are unable to find entities for a specific field, leave them empty. Return your response as JSON with the following fields only, do not respond with any other text.
       {
@@ -382,7 +384,7 @@ In your response include only the following keys and the entities extracted for 
         "imageURL": ""
       }`;
 
-      history.push({role: 'system', content: EXTRACT_PROMPT});
+      history.push({ role: 'system', content: EXTRACT_PROMPT });
 
       const extractResponse = await this.client.invoke(history);
 
@@ -472,8 +474,8 @@ In your response include only the following keys and the entities extracted for 
 
     const inquiry_prompt = `You are an auto-insurance claim assistant. You have the following information about the user's claim : ${JSON.stringify(state.claimDetails)}. The user has come to inquire about an existing claim filed by them. Using ONLY the information provided to you about the user's claim, answer the user's query.`;
 
-    history.push({role: 'system', content: inquiry_prompt});
-    history.push({role: 'user', content: message});
+    history.push({ role: 'system', content: inquiry_prompt });
+    history.push({ role: 'user', content: message });
 
     const response = await this.client.invoke(history);
 
@@ -499,11 +501,11 @@ In your response include only the following keys and the entities extracted for 
       const parsedResponse = JSON.parse(rawContent); // Attempt to parse the cleaned content
 
       if (parsedResponse) {
-        return {message: parsedResponse.response}; // Return the parsed message
+        return { message: parsedResponse.response }; // Return the parsed message
       }
     } catch (error) {
       // Return raw content as fallback in case of parsing errors
-      return {message: response.content};
+      return { message: response.content };
     }
   }
 
