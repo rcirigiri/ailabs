@@ -11,7 +11,7 @@ import ChatMessage from "@/components/ChatMessage";
 import TypingIndicator from "@/components/TypingIndicator";
 import ChatInput from "@/components/ChatInput";
 import ImagePreview from "@/components/ImagePreview";
-import { notification, Progress } from "antd";
+import { notification } from "antd";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface Message {
