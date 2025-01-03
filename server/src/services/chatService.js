@@ -1,4 +1,4 @@
-const { AzureChatOpenAI } = require('@langchain/openai');
+const {AzureChatOpenAI} = require('@langchain/openai');
 const moment = require('moment');
 const {
   findPolicyByPolicyId,
@@ -7,12 +7,74 @@ const {
   createConversation,
   findPolicyByFirstLastAndZipCode,
 } = require('../repository');
-const { LOG_LEVELS } = require('../utils/constants');
+const {LOG_LEVELS} = require('../utils/constants');
 
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const sharp = require('sharp');
+
+const INITIAL_CMD = `You are an auto-insurance claim assistant. Your task is to guide users to file the first notice of loss claims or enquire about previous claims by following these steps -
+# Step 1 : Enquire about the policy number , If policy number is not available, ask for first name , last name and postal code. Only proceed with the next step once you have information about policy number or (first name , last name and postal code). Else keep requesting either Policy number or (first name , last name and postal code) from the user.
+# Step 3 : Ask and Understand the intent of the user, the intent can either be inquire or new_claim. 
+# Only proceed with the next step once you have information about policy number or (first name , last name and postal code) and intent. Else keep requesting information about the missing entity.
+# Step 4 : If the user's intent is inquiry, ask them to provide the claim number. Else, if their intent is new claim filing, thank them for sharing their details and let user know that we will begin the process by asking a set of questions, and ask whether user is ready to proceed.
+# Step 5 : If user intent is inquiry and claim_number entity is missing, keep requesting for claim number. Else, thank user for sharing the details and ask what user wants to know about the claim.
+
+# If at any point, user's wants to change policy number or claim number or the intent is to ask details about another policy number then start from begining (Step 1) and ask or confirm the policy number or claim number again to continue.
+
+# Try to detect the intent of the user at every step and update the field : intent
+# If user changes any of the field values like policy_number, first_name, last_name, postal_code or claim_number then update the values accordingly in the response.
+
+**Response : **
+In your response include only the following keys and the entities extracted for these fields
+1. policy_number
+2. first_name, last_name and postal_code
+3. intent
+4. claim_number
+5. response
+Response should strictly be in JSON format.
+`;
+
+const EXTRACT_PROMPT = `Analyze the conversation between an insurance claims agent and the user and extract the following relevant entities. If you are unable to find entities for a specific field, leave them empty. Return your response as JSON with the following fields only, do not respond with any other text.
+
+**Example Structure**
+      {
+        "policyNumber": "",
+        "vehicle": "",
+        "claimNumber": "",
+        "firstName": "",
+        "lastName": "",
+        "postalCode": "",
+        "incidentDate": "",
+        "lossLocation": {
+          "addressLine": "",
+          "state": "",
+          "city": "",
+          "postalCode": ""
+        },
+        "vehicleDetails": {
+          "licensePlate": "",
+          "VIN": "",
+          "year": "",
+          "make": "",
+          "model": ""
+        },
+        "causeOfLoss": "",
+        "vehicleDamageDetails": "",
+        "claimSubmitted": false,
+        "claimStatus": "pending"
+        "imageURL": ""
+      }
+
+**Important**
+  # If user intend to restart from beginning or intend to change the policy number then response with just a string "RESTART"
+  # If user intend to inquire about an existing claim then response with just a string "INQUIRY"
+  # If the conversation is over then ask if you can assist the user with anything else.    
+`;
+
+const RESTART_PROMPT =
+  'Restart the conversation from begining. Detect the intent of the user and ask for necessary informations to proceed further. Do not ask for policy number again or thank for the policy number if you already have it, unless user wants to change the policy number or inquire about another policy number. Try confirming the policy number or claim number if you already have it.';
 
 class ChatService {
   constructor(config) {
@@ -28,7 +90,7 @@ class ChatService {
       claimDetails: null,
       collectedData: {},
       intent: null,
-      newClaimStep: 0,
+      isStepChanged: false,
     });
   }
 
@@ -38,27 +100,30 @@ class ChatService {
 
   updateState(socketId, updates) {
     const currentState = this.getState(socketId);
-    this.flowState.set(socketId, { ...currentState, ...updates });
+    this.flowState.set(socketId, {...currentState, ...updates});
+  }
+
+  parseResponse(res) {
+    let parsedResponse = {};
+    try {
+      if (res.startsWith('```json') && res.endsWith('```')) {
+        console.log('Removing code block formatting...');
+        parsedResponse = JSON.parse(res.slice(7, -3).trim()); // Remove ```json and ```
+      } else {
+        parsedResponse = JSON.parse(res); // Parse normally if no code block
+      }
+    } catch (e) {
+      //console.log('ERROR parseResponse : ', e);
+      parsedResponse = res;
+    }
+    return parsedResponse;
   }
 
   async initializeConversation(socketId) {
     this.initializeState(socketId);
-    const INITIAL_CMD = `You are an auto-insurance claim assistant. Your task is to guide users to file the first notice of loss claims or enquire about previous claims by following these steps -
-# Step 1 : Enquire about the policy number , If policy number is not available, ask for first name , last name and postal code.
-# Only proceed with the next step once you have information about policy number or (first name , last name and postal code). Else keep requesting either Policy number or (first name , last name and postal code) from the user.
-# Step 3 : Ask and Understand the intent of the user, the intent can either be inquire or new_claim.
-# Only proceed with the next step once you have information about policy number or (first name , last name and postal code) and intent. Else keep requesting information about the missing entity.
-# Step 4 : If the user's intent is inquiry, ask them to provide the claim number. Else, if their intent is new claim filing, thank them for sharing their details and let that know that we will begin the process by asking a set of questions, do not ask any more questions.
-# Step 5 : If user intent was inquiry and they have still not provided claim number, continue requesting the same. Else if, their intent was inquiry and they have provided the claim number, thank them and ask them to ask their query now. Else, skip this step.
-In your response include only the following keys and the entities extracted for these fields
-1. policy_number
-2. first_name, last_name and postal_code
-3. intent
-4. claim_number
-5. response`;
 
     this.conversationHistories.set(socketId, [
-      { role: 'system', content: INITIAL_CMD },
+      {role: 'system', content: INITIAL_CMD},
     ]);
   }
 
@@ -91,50 +156,17 @@ In your response include only the following keys and the entities extracted for 
 
   async handleInitialConversation(socketId, message) {
     const history = this.getConversationHistory(socketId);
-    history.push({ role: 'user', content: message });
+    history.push({role: 'user', content: message});
 
     const response = await this.client.invoke(history);
-    let parsedResponse = {};
-    // try {
-    //   const res = response.content
-    //   console.log('TRY');
-    //   console.log(
-    //     'response.content',
-    //     res,
-    //   );
-    //   if(res?.startsWith('```json')){
-    //     parsedResponse = JSON.parse(res.slice(5, -3));
-    //   }
 
-    //   parsedResponse = JSON.parse(response.content);
-    // } catch (error) {
-    //   console.log('TRY1111111111111');
-
-    //   parsedResponse = response.content;
-    // }
-
-    try {
-      const res = response.content.trim(); // Trim any whitespace
-      console.log('TRY');
-      console.log('response.content', res);
-
-      // Check if response starts and ends with code block notation
-      if (res.startsWith('```json') && res.endsWith('```')) {
-        console.log('Removing code block formatting...');
-        parsedResponse = JSON.parse(res.slice(7, -3).trim()); // Remove ```json and ```
-      } else {
-        parsedResponse = JSON.parse(res); // Parse normally if no code block
-      }
-    } catch (error) {
-      console.log('Error parsing JSON, returning raw content.');
-      parsedResponse = response.content; // Fallback to raw content
-    }
+    const parsedResponse = this.parseResponse(response.content.trim());
 
     history.push({
       role: 'assistant',
-      content: response.content,
+      content: response.content.trim(),
     });
-    console.log(`[ASSISTANT]`, parsedResponse);
+    //console.log(`[ASSISTANT]`, parsedResponse);
     // Handle policy verification
     if (parsedResponse.policy_number) {
       const policy = await findPolicyByPolicyId(parsedResponse.policy_number);
@@ -178,9 +210,10 @@ In your response include only the following keys and the entities extracted for 
         this.updateState(socketId, {
           currentStep: 'NEW_CLAIM',
           intent: 'new_claim',
+          isStepChanged: true,
         });
         return {
-          message: "Thank you for sharing your details. can i begin the process by asking a set of questions? If you're ready, please respond with 'yes'.",
+          message: parsedResponse.response,
         };
       } else if (
         parsedResponse.intent === 'inquire' &&
@@ -193,6 +226,8 @@ In your response include only the following keys and the entities extracted for 
           this.updateState(socketId, {
             currentStep: 'INQUIRY',
             claimDetails: claimInfo,
+            intent: 'inquire',
+            isStepChanged: true,
           });
         } else {
           parsedResponse = {
@@ -203,11 +238,7 @@ In your response include only the following keys and the entities extracted for 
         }
       }
     }
-    console.log(
-      parsedResponse?.response
-        ? JSON.stringify(parsedResponse) + 'sssssssssssssssss'
-        : parsedResponse,
-    );
+
     return {
       message: parsedResponse?.response
         ? parsedResponse?.response
@@ -219,7 +250,7 @@ In your response include only the following keys and the entities extracted for 
     const state = this.getState(socketId);
     const history = this.getConversationHistory(socketId);
 
-    if (state.newClaimStep === 0) {
+    if (state.isStepChanged == true) {
       const NEW_CLAIM_PROMPT = `You are an auto-insurance claim assistant. You have the following details of the vehicles registered under their policy: ${JSON.stringify(state.policyDetails)}. Your task is to guide users file the first notice of loss claims by asking the following questions one at a time:
         - Question 1: Enquire about the date on which the incident occurred .
         - Question 2: Enquire about the location of the incident, collect address line, state, city and zipcode
@@ -227,72 +258,31 @@ In your response include only the following keys and the entities extracted for 
         - Question 4: If vehicle is not present in ${JSON.stringify(state.policyDetails.vehicle)}, enquire about vehicle details such License Plate, VIN, Year, Make and Model
         - Question 5: Enquire about the cause of loss, was it due to Animal impact, wind, hail, fire or something?
         - Question 6: Enquire about details of the vehicle damage
-        - Question 7 : Ask if the user can upload any pictures associated with the damage
-        - Question 8: Once you have all the above inputs, finally ask the user if they like to proceed to submit the claim
-        - If user agrees to proceed with above data then return a response with just a string "SUBMITTED" and nothing else.`;
+        - Question 7 : Ask if the user can upload any pictures associated with the damage. Response with exactly this prefix "IMAGE_UPLOAD" for this question only. Do not ask the question without the prefix or the prefix without the question. The question and the prefix should strictly go together always. Strictly do not mention anything about IMAGE_UPLOAD in any of the conversation other than this question.
+        - Once you have all the above inputs, finally ask the user if they like to proceed to submit the claim
+        - If user agrees to proceed with above data then return a response with just a string "SUBMITTED" and nothing else.
 
-      history.push({ role: 'system', content: NEW_CLAIM_PROMPT });
-      this.updateState(socketId, { newClaimStep: 1 });
-    }
-    console.log('[STEP] : =>>>>>>>>>>>>>>>>>>>>', state.newClaimStep);
-
-    if (state.newClaimStep === 5) {
-      this.updateState(socketId, { newClaimStep: state.newClaimStep + 1 });
-      history.push({
-        role: 'assistant',
-        content: 'Please upload pictures associated with the damage',
+        **Important**
+        # Do not mention the index of question.
+        # If at any point, user wants to restart the conversation or modify any of the answer then repeat from that question and accept the correct answer.
+        # If user intend to restart from beginning or intend to change the policy number then response with just a string "RESTART"
+        # If user intend to inquire about an existing claim then response with just a string "INQUIRY"
+        # If the conversation is over then ask if you can assist the user with anything else.
+        
+        **Response:** 
+        Response should strictly be in plain text`;
+      history.push({role: 'system', content: NEW_CLAIM_PROMPT});
+      this.updateState(socketId, {
+        isStepChanged: false,
       });
-      return {
-        message: `Please upload pictures associated with the damage`,
-        requestImage: true,
-      };
     }
-    // if (base64Data) {
-    //   // Create a unique filename for the image
-    //   // Define the directory to save the images
-    //   const filePath = path.join(__dirname, '../public/uploads');
-    //   if (!fs.existsSync(filePath)) {
-    //     fs.mkdirSync(filePath, {recursive: true});
-    //   }
-    //   try {
-    //     // Remove the base64 header part (e.g., "data:image/png;base64,")
-    //     const base64Image = base64Data.replace(/^data:image\/\w+;base64,/, '');
-
-    //     // Decode the base64 image data into a buffer
-    //     const imageBuffer = Buffer.from(base64Image, 'base64');
-
-    //     // Generate a unique filename for the image
-    //     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    //     const outputFilePath = path.join(filePath, `image-${uniqueSuffix}.png`);
-
-    //     // Use sharp to compress and save the image
-    //     await sharp(imageBuffer)
-    //       .resize(800) // Optional: Resize the image (you can set the width, height, or keep the aspect ratio)
-    //       .toFormat('png') // Optional: Set the image format (e.g., PNG)
-    //       .toFile(outputFilePath); // Save the image to the filesystem
-
-    //     // Return the saved image path
-    //     return outputFilePath;
-    //   } catch (error) {
-    //     console.log(
-    //       '>>> ~ ChatService ~ handleNewClaimConversation ~ error:',
-    //       error,
-    //     );
-    //     // throw new Error('Error compressing or saving the image: ' + error.message);
-    //     return {
-    //       message: 'An error occurred while processing your image.',
-    //       error: true,
-    //       requestedImage: false,
-    //     };
-    //   }
-    // }
 
     if (base64Data) {
       // Create a unique filename for the image
       // Define the directory to save the images
       const filePath = path.join(__dirname, '../public/uploads');
       if (!fs.existsSync(filePath)) {
-        fs.mkdirSync(filePath, { recursive: true });
+        fs.mkdirSync(filePath, {recursive: true});
       }
       try {
         // Remove the base64 header part (e.g., "data:image/png;base64,")
@@ -309,30 +299,26 @@ In your response include only the following keys and the entities extracted for 
           .toFormat('png') // Optional: Set the image format (e.g., PNG)
           .toFile(outputFilePath); // Save the image to the filesystem
 
-        history.push({ role: 'user', content: `File imageURL is ${fileName}` });
+        history.push({
+          role: 'user',
+          content: `Uploaded file url is ${fileName}`,
+        });
 
         const response = await this.client.invoke(history);
+
+        console.log('response>>', response.content);
 
         history.push({
           role: 'assistant',
           content: response.content,
         });
-        try {
-          const parsedResponse = JSON.parse(response.content);
-          if (parsedResponse)
-            return { message: parsedResponse.response, requestImage: false };
-        } catch (error) {
-          return {
-            message: response.content,
-            requestImage: false,
-          };
-        }
 
-        // return {
-        //   message: 'Image  Unloaded successfully',
-        //   error: true,
-        //   requestedImage: false,
-        // };
+        const parsedResponse = this.parseResponse(response.content);
+
+        return {
+          message: parsedResponse?.response ?? parsedResponse,
+          requestImage: false,
+        };
       } catch (error) {
         console.log(
           '>>> ~ ChatService ~ handleNewClaimConversation ~ error:',
@@ -347,64 +333,64 @@ In your response include only the following keys and the entities extracted for 
       }
     }
 
-    history.push({ role: 'user', content: message });
+    history.push({role: 'user', content: message});
 
     const response = await this.client.invoke(history);
 
-    const responseContent = response.content;
-    history.push({ role: 'assistant', content: responseContent });
-    this.updateState(socketId, { newClaimStep: state.newClaimStep + 1 });
-    if (responseContent.trim() === 'SUBMITTED') {
-      const EXTRACT_PROMPT = `You are a highly accurate entity extraction assistant. Your role is to analyze the conversation between an insurance claims agent and the user and extract the following relevant entities. If you are unable to find entities for a specific field, leave them empty. Return your response as JSON with the following fields only, do not respond with any other text.
-      {
-        "policyNumber": "",
-        "vehicle": "",
-        "claimNumber": "",
-        "firstName": "",
-        "lastName": "",
-        "postalCode": "",
-        "incidentDate": "",
-        "lossLocation": {
-          "addressLine": "",
-          "state": "",
-          "city": "",
-          "postalCode": ""
-        },
-        "vehicleDetails": {
-          "licensePlate": "",
-          "VIN": "",
-          "year": "",
-          "make": "",
-          "model": ""
-        },
-        "causeOfLoss": "",
-        "vehicleDamageDetails": "",
-        "claimSubmitted": false,
-        "claimStatus": "pending"
-        "imageURL": ""
-      }`;
+    //console.log('History >>', history);
+    console.log('Response >>', response.content);
 
-      history.push({ role: 'system', content: EXTRACT_PROMPT });
+    const responseContent = response.content;
+    //this.updateState(socketId, {newClaimStep: state.newClaimStep + 1});
+    if (responseContent.trim().includes('IMAGE_UPLOAD')) {
+      const responseMessage = responseContent
+        .trim()
+        .replace('IMAGE_UPLOAD', '');
+      history.push({
+        role: 'assistant',
+        content: responseMessage,
+      });
+      return {
+        message: responseMessage,
+        requestImage: true,
+      };
+    } else if (responseContent.trim().includes('INQUIRY')) {
+      this.updateState(socketId, {
+        currentStep: 'INQUIRY',
+        intent: 'inquire',
+        isStepChanged: true,
+      });
+
+      this.processMessage(socketId, message, null);
+    } else if (responseContent.trim().includes('RESTART')) {
+      this.updateState(socketId, {
+        currentStep: 'INITIAL',
+        intent: null,
+      });
+      history.push({
+        role: 'system',
+        content: INITIAL_CMD,
+      });
+      history.push({
+        role: 'system',
+        content: RESTART_PROMPT,
+      });
+      const response = await this.client.invoke(history);
+      const responseContent = this.parseResponse(response.content.trim());
+      history.push({
+        role: 'assistant',
+        content: response.content.trim(),
+      });
+      return {
+        message: responseContent?.response,
+        requestImage: false,
+      };
+    } else if (responseContent.trim() === 'SUBMITTED') {
+      history.push({role: 'system', content: EXTRACT_PROMPT});
 
       const extractResponse = await this.client.invoke(history);
 
-      // const claimData = JSON.parse(extractResponse.content);
-
-      let claimData;
-
-      try {
-        let rawContent = extractResponse.content.trim(); // Trim leading/trailing whitespace
-
-        // Check if content starts and ends with code block syntax
-        if (rawContent.startsWith('```json') && rawContent.endsWith('```')) {
-          rawContent = rawContent.slice(7, -3).trim(); // Remove ```json and ``` markers
-        }
-
-        claimData = JSON.parse(rawContent); // Parse the cleaned content
-      } catch (error) {
-        console.error('Error parsing claimData:', error);
-        claimData = extractResponse.content; // Fallback to raw content
-      }
+      const claimData = this.parseResponse(extractResponse.content.trim());
 
       console.log('claimData:', claimData);
 
@@ -422,91 +408,95 @@ In your response include only the following keys and the entities extracted for 
         conversationRaw: JSON.stringify(history),
       });
 
+      const claimInfo = await findClaimByClaimNumber(claimNumber);
+
+      this.updateState(socketId, {
+        claimDetails: claimInfo,
+        currentStep: 'INQUIRY',
+        intent: 'inquire',
+        isStepChanged: true,
+      });
+
+      const assistantMessage = `Claim created successfully. Your claim number is ${claimNumber}. May I assist you with anything else ?`;
+
+      history.push({
+        role: 'assistant',
+        content: assistantMessage,
+      });
+
       return {
-        message: `Claim created successfully. Your claim number is ${claimNumber}`,
-        complete: true,
+        message: assistantMessage,
       };
     }
 
-    // try {
-    //   const parsedResponse = JSON.parse(response.content);
-    //   if (parsedResponse)
-    //     return {message: parsedResponse.response, requestImage: false};
-    // } catch (error) {
-    //   return {
-    //     message: response.content,
-    //     requestImage: false,
-    //   };
-    // }
-
-    try {
-      let rawContent = response.content.trim(); // Trim leading/trailing whitespace
-
-      // Check if content starts and ends with code block syntax
-      if (rawContent.startsWith('```json') && rawContent.endsWith('```')) {
-        console.log('Removing code block formatting...');
-        rawContent = rawContent.slice(7, -3).trim(); // Remove ```json and ``` markers
-      }
-
-      const parsedResponse = JSON.parse(rawContent); // Attempt to parse the cleaned content
-
-      if (parsedResponse) {
-        return {
-          message: parsedResponse.response,
-          requestImage: false,
-        };
-      }
-    } catch (error) {
-      console.log('Error parsing JSON, returning raw content.');
-
-      return {
-        message: response.content, // Fallback to raw content
-        requestImage: false,
-      };
-    }
-
-    // return {message: responseContent};
+    history.push({
+      role: 'assistant',
+      content: response.content.trim(),
+    });
+    return {
+      message: response.content.trim(),
+      requestImage: false,
+    };
   }
 
   async handleInquiryConversation(socketId, message) {
     const state = this.getState(socketId);
     const history = this.getConversationHistory(socketId);
 
-    const inquiry_prompt = `You are an auto-insurance claim assistant. You have the following information about the user's claim : ${JSON.stringify(state.claimDetails)}. The user has come to inquire about an existing claim filed by them. Using ONLY the information provided to you about the user's claim, answer the user's query.`;
+    if (state.isStepChanged == true) {
+      const INQUIRY_PROMPT = `You are an auto-insurance claim assistant. You have the following information about the user's claim : ${JSON.stringify(state.claimDetails)}. The user has come to inquire about an existing claim filed by them. Using ONLY the information provided to you about the user's claim, answer the user's query.
+      
+      **Important**
+      # If user intend to restart from beginning or intend to change the policy number or file a new claim or inquire about another claim number then response with just a string "RESTART"
+      # If the conversation is over then ask if you can assist the user with anything else.    
 
-    history.push({ role: 'system', content: inquiry_prompt });
-    history.push({ role: 'user', content: message });
+      **Response:** 
+      Response should strictly be in plain text
+      `;
+      history.push({role: 'system', content: INQUIRY_PROMPT});
+      this.updateState(socketId, {
+        isStepChanged: false,
+      });
+    }
+
+    history.push({role: 'user', content: message});
 
     const response = await this.client.invoke(history);
 
+    console.log('Inquiry >>', response.content);
+
+    const parsedContent = this.parseResponse(response.content.trim());
+
     history.push({
       role: 'assistant',
-      content: response.content,
+      content: response.content.trim(),
     });
-    // try {
-    //   const parsedResponse = JSON.parse(response.content);
-    //   if (parsedResponse) return {message: parsedResponse.response};
-    // } catch (error) {
-    //   return {message: response.content};
-    // }
 
-    try {
-      let rawContent = response.content.trim(); // Trim leading/trailing whitespace
-
-      // Check if content starts and ends with code block syntax
-      if (rawContent.startsWith('```json') && rawContent.endsWith('```')) {
-        rawContent = rawContent.slice(7, -3).trim(); // Remove ```json and ``` markers
-      }
-
-      const parsedResponse = JSON.parse(rawContent); // Attempt to parse the cleaned content
-
-      if (parsedResponse) {
-        return { message: parsedResponse.response }; // Return the parsed message
-      }
-    } catch (error) {
-      // Return raw content as fallback in case of parsing errors
-      return { message: response.content };
+    if (response.content.trim().inclides('RESTART')) {
+      this.updateState(socketId, {
+        currentStep: 'INITIAL',
+        intent: null,
+      });
+      history.push({
+        role: 'system',
+        content: INITIAL_CMD,
+      });
+      history.push({
+        role: 'system',
+        content: RESTART_PROMPT,
+      });
+      const response = await this.client.invoke(history);
+      const responseContent = this.parseResponse(response.content.trim());
+      history.push({
+        role: 'assistant',
+        content: response.content.trim(),
+      });
+      return {
+        message: responseContent?.response,
+      };
     }
+
+    return {message: parsedContent?.response ?? response.content};
   }
 
   getConversationHistory(socketId) {
