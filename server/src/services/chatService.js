@@ -16,7 +16,7 @@ const sharp = require('sharp');
 
 const INITIAL_CMD = `You are an auto-insurance claim assistant. Your task is to guide users to file the first notice of loss claims or enquire about previous claims by following these steps -
 # Step 1 : Enquire about the policy number , If policy number is not available, ask for first name , last name and postal code. Only proceed with the next step once you have information about policy number or (first name , last name and postal code). Else keep requesting either Policy number or (first name , last name and postal code) from the user.
-# Step 3 : Ask and Understand the intent of the user, the intent can either be inquire or new_claim. 
+# Step 3 : Ask and Understand the intent of the user, the intent can either be inquiry or new_claim. 
 # Only proceed with the next step once you have information about policy number or (first name , last name and postal code) and intent. Else keep requesting information about the missing entity.
 # Step 4 : If the user's intent is inquiry, ask them to provide the claim number. Else, if their intent is new claim filing, thank them for sharing their details and let user know that we will begin the process by asking a set of questions, and ask whether user is ready to proceed.
 # Step 5 : If user intent is inquiry and claim_number entity is missing, keep requesting for claim number. Else, thank user for sharing the details and ask what user wants to know about the claim.
@@ -107,7 +107,6 @@ class ChatService {
     let parsedResponse = {};
     try {
       if (res.startsWith('```json') && res.endsWith('```')) {
-        console.log('Removing code block formatting...');
         parsedResponse = JSON.parse(res.slice(7, -3).trim()); // Remove ```json and ```
       } else {
         parsedResponse = JSON.parse(res); // Parse normally if no code block
@@ -155,12 +154,25 @@ class ChatService {
   }
 
   async handleInitialConversation(socketId, message) {
+    const state = this.getState(socketId);
+    if (state.isStepChanged == true) {
+      this.conversationHistories.set(socketId, [
+        {role: 'system', content: INITIAL_CMD},
+      ]);
+      this.updateState(socketId, {
+        isStepChanged: false,
+      });
+    }
+
     const history = this.getConversationHistory(socketId);
+
     history.push({role: 'user', content: message});
 
     const response = await this.client.invoke(history);
 
-    const parsedResponse = this.parseResponse(response.content.trim());
+    const parsedResponse = this.parseResponse(response.content);
+
+    console.log('>>restart', parsedResponse);
 
     history.push({
       role: 'assistant',
@@ -216,7 +228,7 @@ class ChatService {
           message: parsedResponse.response,
         };
       } else if (
-        parsedResponse.intent === 'inquire' &&
+        parsedResponse.intent === 'inquiry' &&
         parsedResponse.claim_number
       ) {
         const claimInfo = await findClaimByClaimNumber(
@@ -226,7 +238,7 @@ class ChatService {
           this.updateState(socketId, {
             currentStep: 'INQUIRY',
             claimDetails: claimInfo,
-            intent: 'inquire',
+            intent: 'inquiry',
             isStepChanged: true,
           });
         } else {
@@ -251,26 +263,58 @@ class ChatService {
     const history = this.getConversationHistory(socketId);
 
     if (state.isStepChanged == true) {
-      const NEW_CLAIM_PROMPT = `You are an auto-insurance claim assistant. You have the following details of the vehicles registered under their policy: ${JSON.stringify(state.policyDetails)}. Your task is to guide users file the first notice of loss claims by asking the following questions one at a time:
+      const NEW_CLAIM_PROMPT = `You are an auto-insurance claim assistant. You have the following details of the vehicles registered under their policy: ${JSON.stringify(state.policyDetails)}. Your task is to guide users file the first notice of loss claims by asking the following questions one at a time and detect the intent of the user. 
+      The intents can be one of the following : 
+       - RESTART : When the intention of the user is to restart the conversation or change the policy number or to inquire about an existing claim or file a new claim.
+       - NEXT : When user answers the question and want to proceed.
+      The questions are as follows : 
         - Question 1: Enquire about the date on which the incident occurred .
         - Question 2: Enquire about the location of the incident, collect address line, state, city and zipcode
         - Question 3: Enquire about which vehicle from ${JSON.stringify(state.policyDetails.vehicle)} was involved in the accident , do not object make it bullet points so that user can easily understand.
         - Question 4: If vehicle is not present in ${JSON.stringify(state.policyDetails.vehicle)}, enquire about vehicle details such License Plate, VIN, Year, Make and Model
         - Question 5: Enquire about the cause of loss, was it due to Animal impact, wind, hail, fire or something?
         - Question 6: Enquire about details of the vehicle damage
-        - Question 7 : Ask if the user can upload any pictures associated with the damage. Response with exactly this prefix "IMAGE_UPLOAD" for this question only. Do not ask the question without the prefix or the prefix without the question. The question and the prefix should strictly go together always. Strictly do not mention anything about IMAGE_UPLOAD in any of the conversation other than this question.
+        - Question 7 : Ask if the user can upload any pictures associated with the damage. Response should contain is_image_upload as true for this question and false for every other question.
+          Example response : 
+            {
+              "intent": "NEXT",
+              "is_image_upload": true,
+              "is_submitted": false,
+              "response": "Can you upload any pictures associated with the damage?"
+            }
         - Once you have all the above inputs, finally ask the user if they like to proceed to submit the claim
-        - If user agrees to proceed with above data then return a response with just a string "SUBMITTED" and nothing else.
+        - If user agrees to proceed with above data then the value for is_submitted in the response should be true and false for every other scenario.
+          Example response : 
+            {
+              "intent": "NEXT",
+              "is_image_upload": false,
+              "is_submitted": true,
+              "response": "Your claim has been submitted. Can I assist you with anything else?"
+            }
+
 
         **Important**
+        # Try to detect the intent of the user at every step and update the field : intent
+        # Do not go to next question once current question is not answered.
         # Do not mention the index of question.
-        # If at any point, user wants to restart the conversation or modify any of the answer then repeat from that question and accept the correct answer.
-        # If user intend to restart from beginning or intend to change the policy number then response with just a string "RESTART"
-        # If user intend to inquire about an existing claim then response with just a string "INQUIRY"
-        # If the conversation is over then ask if you can assist the user with anything else.
+        # If the conversation is over then ask if you can assist the user with anything else and try to detect the intent.
         
-        **Response:** 
-        Response should strictly be in plain text`;
+        **Response : **
+        In your response include only the following keys :
+        1. intent
+        2. is_image_upload
+        3. is_submitted
+        4. response
+        Response should strictly be in JSON format.
+
+        Example response : 
+            {
+              "intent": "NEXT",
+              "is_image_upload": false,
+              "is_submitted": false,
+              "response": "Please provide the date on which the incident occurred."
+            }
+        `;
       history.push({role: 'system', content: NEW_CLAIM_PROMPT});
       this.updateState(socketId, {
         isStepChanged: false,
@@ -306,17 +350,15 @@ class ChatService {
 
         const response = await this.client.invoke(history);
 
-        console.log('response>>', response.content);
-
         history.push({
           role: 'assistant',
-          content: response.content,
+          content: response.content.trim(),
         });
 
-        const parsedResponse = this.parseResponse(response.content);
+        const parsedResponse = this.parseResponse(response.content.trim());
 
         return {
-          message: parsedResponse?.response ?? parsedResponse,
+          message: parsedResponse.response,
           requestImage: false,
         };
       } catch (error) {
@@ -337,55 +379,30 @@ class ChatService {
 
     const response = await this.client.invoke(history);
 
-    //console.log('History >>', history);
-    console.log('Response >>', response.content);
+    const responseContent = this.parseResponse(response.content.trim());
 
-    const responseContent = response.content;
+    console.log('Response >>', responseContent);
+
     //this.updateState(socketId, {newClaimStep: state.newClaimStep + 1});
-    if (responseContent.trim().includes('IMAGE_UPLOAD')) {
-      const responseMessage = responseContent
-        .trim()
-        .replace('IMAGE_UPLOAD', '');
-      history.push({
-        role: 'assistant',
-        content: responseMessage,
-      });
-      return {
-        message: responseMessage,
-        requestImage: true,
-      };
-    } else if (responseContent.trim().includes('INQUIRY')) {
-      this.updateState(socketId, {
-        currentStep: 'INQUIRY',
-        intent: 'inquire',
-        isStepChanged: true,
-      });
-
-      this.processMessage(socketId, message, null);
-    } else if (responseContent.trim().includes('RESTART')) {
-      this.updateState(socketId, {
-        currentStep: 'INITIAL',
-        intent: null,
-      });
-      history.push({
-        role: 'system',
-        content: INITIAL_CMD,
-      });
-      history.push({
-        role: 'system',
-        content: RESTART_PROMPT,
-      });
-      const response = await this.client.invoke(history);
-      const responseContent = this.parseResponse(response.content.trim());
+    if (responseContent.is_image_upload == true) {
       history.push({
         role: 'assistant',
         content: response.content.trim(),
       });
       return {
-        message: responseContent?.response,
-        requestImage: false,
+        message: responseContent.response,
+        requestImage: true,
       };
-    } else if (responseContent.trim() === 'SUBMITTED') {
+    }
+    if (responseContent.intent == 'RESTART') {
+      console.log('Intent restart');
+      this.updateState(socketId, {
+        currentStep: 'INITIAL',
+        intent: null,
+        isStepChanged: true,
+      });
+      return this.processMessage(socketId, message, null);
+    } else if (responseContent.is_submitted == true) {
       history.push({role: 'system', content: EXTRACT_PROMPT});
 
       const extractResponse = await this.client.invoke(history);
@@ -413,7 +430,7 @@ class ChatService {
       this.updateState(socketId, {
         claimDetails: claimInfo,
         currentStep: 'INQUIRY',
-        intent: 'inquire',
+        intent: 'inquiry',
         isStepChanged: true,
       });
 
@@ -427,16 +444,16 @@ class ChatService {
       return {
         message: assistantMessage,
       };
+    } else {
+      history.push({
+        role: 'assistant',
+        content: response.content.trim(),
+      });
+      return {
+        message: responseContent.response,
+        requestImage: false,
+      };
     }
-
-    history.push({
-      role: 'assistant',
-      content: response.content.trim(),
-    });
-    return {
-      message: response.content.trim(),
-      requestImage: false,
-    };
   }
 
   async handleInquiryConversation(socketId, message) {
@@ -444,14 +461,25 @@ class ChatService {
     const history = this.getConversationHistory(socketId);
 
     if (state.isStepChanged == true) {
-      const INQUIRY_PROMPT = `You are an auto-insurance claim assistant. You have the following information about the user's claim : ${JSON.stringify(state.claimDetails)}. The user has come to inquire about an existing claim filed by them. Using ONLY the information provided to you about the user's claim, answer the user's query.
+      const INQUIRY_PROMPT = `You are an auto-insurance claim assistant. You have the following information about the user's claim : ${JSON.stringify(state.claimDetails)}. The user has come to inquire about an existing claim filed by them. Using ONLY the information provided to you about the user's claim, answer the user's query. With each conversation, detect the intent of the user. 
+      The intents can be one of the following : 
+       - RESTART : When the intention of the user is to restart the conversation or change the policy number or inquire about a different claim number or file a new claim.
+       - NEXT : When user answers the question and want to proceed.
       
       **Important**
-      # If user intend to restart from beginning or intend to change the policy number or file a new claim or inquire about another claim number then response with just a string "RESTART"
-      # If the conversation is over then ask if you can assist the user with anything else.    
+      # If the conversation is over then ask if you can assist the user with anything else and try detecting the intent of the user.    
 
-      **Response:** 
-      Response should strictly be in plain text
+      **Response : **
+        In your response must include only the following keys :
+        1. intent
+        2. response
+        Response should strictly be in JSON format.
+
+        Example response : 
+            {
+              "intent": "NEXT",
+              "response": "What do you want to know about this claim."
+            }
       `;
       history.push({role: 'system', content: INQUIRY_PROMPT});
       this.updateState(socketId, {
@@ -465,38 +493,23 @@ class ChatService {
 
     console.log('Inquiry >>', response.content);
 
-    const parsedContent = this.parseResponse(response.content.trim());
+    const parsedContent = this.parseResponse(response.content);
 
     history.push({
       role: 'assistant',
-      content: response.content.trim(),
+      content: response.content,
     });
 
-    if (response.content.trim().inclides('RESTART')) {
+    if (parsedContent.intent == 'RESTART') {
       this.updateState(socketId, {
         currentStep: 'INITIAL',
         intent: null,
+        isStepChanged: true,
       });
-      history.push({
-        role: 'system',
-        content: INITIAL_CMD,
-      });
-      history.push({
-        role: 'system',
-        content: RESTART_PROMPT,
-      });
-      const response = await this.client.invoke(history);
-      const responseContent = this.parseResponse(response.content.trim());
-      history.push({
-        role: 'assistant',
-        content: response.content.trim(),
-      });
-      return {
-        message: responseContent?.response,
-      };
+      return this.processMessage(socketId, message, null);
+    } else {
+      return {message: parsedContent.response};
     }
-
-    return {message: parsedContent?.response ?? response.content};
   }
 
   getConversationHistory(socketId) {

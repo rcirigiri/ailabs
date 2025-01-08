@@ -28,7 +28,7 @@ const ClaimSchema = new mongoose.Schema(
       required: false,
     },
     incidentDate: {
-      type: Date,
+      type: String,
       required: false,
     },
     lossLocation: {
