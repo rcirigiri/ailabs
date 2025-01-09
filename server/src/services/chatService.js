@@ -131,16 +131,16 @@ class ChatService {
       const state = this.getState(socketId);
       let response;
 
-      if (state.currentStep === 'INITIAL') {
-        response = await this.handleInitialConversation(socketId, message);
-      } else if (state.currentStep === 'NEW_CLAIM') {
+      if (state.currentStep === 'NEW_CLAIM' && state.policyDetails) {
         response = await this.handleNewClaimConversation(
           socketId,
           message,
           image,
         );
-      } else if (state.currentStep === 'INQUIRY') {
+      } else if (state.currentStep === 'INQUIRY' && state.claimDetails) {
         response = await this.handleInquiryConversation(socketId, message);
+      } else {
+        response = await this.handleInitialConversation(socketId, message);
       }
 
       return response;
@@ -270,8 +270,8 @@ class ChatService {
       The questions are as follows : 
         - Question 1: Enquire about the date on which the incident occurred .
         - Question 2: Enquire about the location of the incident, collect address line, state, city and zipcode
-        - Question 3: Enquire about which vehicle from ${JSON.stringify(state.policyDetails.vehicle)} was involved in the accident , do not object make it bullet points so that user can easily understand.
-        - Question 4: If vehicle is not present in ${JSON.stringify(state.policyDetails.vehicle)}, enquire about vehicle details such License Plate, VIN, Year, Make and Model
+        - Question 3: Enquire about which vehicle from ${JSON.stringify(state.policyDetails?.vehicle)} was involved in the accident , do not object make it bullet points so that user can easily understand.
+        - Question 4: If vehicle is not present in ${JSON.stringify(state.policyDetails?.vehicle)}, enquire about vehicle details such License Plate, VIN, Year, Make and Model
         - Question 5: Enquire about the cause of loss, was it due to Animal impact, wind, hail, fire or something?
         - Question 6: Enquire about details of the vehicle damage
         - Question 7 : Ask if the user can upload any pictures associated with the damage. Response should contain is_image_upload as true for this question and false for every other question.
