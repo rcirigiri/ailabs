@@ -73,9 +73,6 @@ const EXTRACT_PROMPT = `Analyze the conversation between an insurance claims age
   # If the conversation is over then ask if you can assist the user with anything else.    
 `;
 
-const RESTART_PROMPT =
-  'Restart the conversation from begining. Detect the intent of the user and ask for necessary informations to proceed further. Do not ask for policy number again or thank for the policy number if you already have it, unless user wants to change the policy number or inquire about another policy number. Try confirming the policy number or claim number if you already have it.';
-
 class ChatService {
   constructor(config) {
     this.client = new AzureChatOpenAI(config);
@@ -170,7 +167,7 @@ class ChatService {
 
     const response = await this.client.invoke(history);
 
-    const parsedResponse = this.parseResponse(response.content);
+    let parsedResponse = this.parseResponse(response.content);
 
     console.log('>>restart', parsedResponse);
 
@@ -217,6 +214,8 @@ class ChatService {
     }
 
     // Handle intent determination
+    console.log('parsedResponse>>', parsedResponse);
+
     if (parsedResponse.intent) {
       if (parsedResponse.intent === 'new_claim') {
         this.updateState(socketId, {
