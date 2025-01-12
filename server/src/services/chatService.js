@@ -16,10 +16,10 @@ const sharp = require('sharp');
 
 const INITIAL_CMD = `You are an auto-insurance claim assistant. Your task is to guide users to file the first notice of loss claims or enquire about previous claims by following these steps -
 # Step 1 : Enquire about the policy number , If policy number is not available, ask for first name , last name and postal code. Only proceed with the next step once you have information about policy number or (first name , last name and postal code). Else keep requesting either Policy number or (first name , last name and postal code) from the user.
-# Step 3 : Ask and Understand the intent of the user, the intent can either be inquiry or new_claim. 
+# Step 3 : Ask and Understand the intent of the user, the intent can either be enquiry or new_claim. 
 # Only proceed with the next step once you have information about policy number or (first name , last name and postal code) and intent. Else keep requesting information about the missing entity.
-# Step 4 : If the user's intent is inquiry, ask them to provide the claim number. Else, if their intent is new claim filing, thank them for sharing their details and let user know that we will begin the process by asking a set of questions, and ask whether user is ready to proceed.
-# Step 5 : If user intent is inquiry and claim_number entity is missing, keep requesting for claim number. Else, thank user for sharing the details and ask what user wants to know about the claim.
+# Step 4 : If the user's intent is enquiry, ask them to provide the claim number. Else, if their intent is new claim filing, thank them for sharing their details and let user know that we will begin the process by asking a set of questions, and ask whether user is ready to proceed.
+# Step 5 : If user intent is enquiry and claim_number entity is missing, keep requesting for claim number. Else, thank user for sharing the details and ask what user wants to know about the claim.
 
 # If at any point, user's wants to change policy number or claim number or the intent is to ask details about another policy number then start from begining (Step 1) and ask or confirm the policy number or claim number again to continue.
 
@@ -69,7 +69,7 @@ const EXTRACT_PROMPT = `Analyze the conversation between an insurance claims age
 
 **Important**
   # If user intend to restart from beginning or intend to change the policy number then response with just a string "RESTART"
-  # If user intend to inquire about an existing claim then response with just a string "INQUIRY"
+  # If user intend to inquire about an existing claim then response with just a string "ENQUIRY"
   # If the conversation is over then ask if you can assist the user with anything else.    
 `;
 
@@ -227,7 +227,7 @@ class ChatService {
           message: parsedResponse.response,
         };
       } else if (
-        parsedResponse.intent === 'inquiry' &&
+        parsedResponse.intent === 'enquiry' &&
         parsedResponse.claim_number
       ) {
         const claimInfo = await findClaimByClaimNumber(
@@ -235,9 +235,9 @@ class ChatService {
         );
         if (claimInfo) {
           this.updateState(socketId, {
-            currentStep: 'INQUIRY',
+            currentStep: 'ENQUIRY',
             claimDetails: claimInfo,
-            intent: 'inquiry',
+            intent: 'enquiry',
             isStepChanged: true,
           });
         } else {
@@ -428,8 +428,8 @@ class ChatService {
 
       this.updateState(socketId, {
         claimDetails: claimInfo,
-        currentStep: 'INQUIRY',
-        intent: 'inquiry',
+        currentStep: 'ENQUIRY',
+        intent: 'enquiry',
         isStepChanged: true,
       });
 
