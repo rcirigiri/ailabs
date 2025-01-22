@@ -126,6 +126,15 @@ class ChatService {
   async processMessage(socketId, message, image) {
     try {
       const state = this.getState(socketId);
+      // console.log(
+      //   '----------------------------Processing message-----------------------------------',
+      // );
+      // console.log('Message: ', message);
+      // console.log('State: ', state);
+      // console.log(
+      //   '---------------------------------------------------------------------------------',
+      // );
+
       let response;
 
       if (state.currentStep === 'NEW_CLAIM' && state.policyDetails) {
@@ -134,7 +143,7 @@ class ChatService {
           message,
           image,
         );
-      } else if (state.currentStep === 'INQUIRY' && state.claimDetails) {
+      } else if (state.currentStep === 'ENQUIRY' && state.claimDetails) {
         response = await this.handleInquiryConversation(socketId, message);
       } else {
         response = await this.handleInitialConversation(socketId, message);
