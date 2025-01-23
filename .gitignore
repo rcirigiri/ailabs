@@ -1,2 +1,4 @@
 server/src/public/uploads/
 !server/src/public/uploads/index.js
+.DS_Store
+**/.DS_Store
