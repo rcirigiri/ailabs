@@ -1,12 +1,12 @@
-const { createServer } = require('http');
-const { env, mongoose, app } = require('./config');
+const {createServer} = require('http');
+const {env, mongoose, app} = require('./config');
 const ChatService = require('./services/chatService');
-const { LOG_LEVELS } = require('./utils/constants');
+const {LOG_LEVELS} = require('./utils/constants');
 const multer = require('multer');
 
 const server = createServer(app);
 const io = require('socket.io')(server, {
-  cors: { origin: '*' },
+  cors: {origin: '*'},
   path: '/api/',
 });
 
@@ -22,7 +22,6 @@ const openaiConfig = {
   azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION,
 };
 
-
 io.on('connection', socket => {
   const chatService = new ChatService(openaiConfig);
   console.log('New client connected', LOG_LEVELS.INFO);
@@ -33,7 +32,7 @@ io.on('connection', socket => {
   });
 
   // Single event handler for all messages
-  socket.on('message', async ({ text }) => {
+  socket.on('message', async ({text}) => {
     try {
       const response = await chatService.processMessage(socket.id, text);
       socket.emit('message', response);
@@ -63,12 +62,11 @@ io.on('connection', socket => {
   //   }
   // });
 
-
   // Store chunks temporarily for each socket connection
   const imageChunks = {};
 
   // Handle image uploads
-  socket.on('image', async ({ image, isChunk, isLastChunk }) => {
+  socket.on('image', async ({image, isChunk, isLastChunk}) => {
     try {
       if (isChunk) {
         // Initialize an array for storing chunks if it doesn't exist
@@ -83,12 +81,20 @@ io.on('connection', socket => {
           const fullImage = imageChunks[socket.id].join(''); // Combine all chunks
           delete imageChunks[socket.id]; // Clean up chunks for the socket
 
-          const response = await chatService.processMessage(socket.id, null, fullImage);
+          const response = await chatService.processMessage(
+            socket.id,
+            null,
+            fullImage,
+          );
           socket.emit('message', response);
         }
       } else {
         // If it's not chunked, process directly
-        const response = await chatService.processMessage(socket.id, null, image);
+        const response = await chatService.processMessage(
+          socket.id,
+          null,
+          image,
+        );
         socket.emit('message', response);
       }
     } catch (error) {
@@ -99,7 +105,6 @@ io.on('connection', socket => {
       });
     }
   });
-
 
   socket.on('disconnect', () => {
     chatService.conversationHistories.delete(socket.id);
